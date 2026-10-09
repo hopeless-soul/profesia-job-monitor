@@ -7,3 +7,4 @@ jobs.json
 config.json
 subscribers.json
 *.log
+run-monitor.bat

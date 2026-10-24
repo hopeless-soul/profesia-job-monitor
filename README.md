@@ -1,5 +1,6 @@
 # Profesia Job Monitor
 
+<<<<<<< HEAD
 A lightweight CLI daemon that watches [Profesia.sk](https://www.profesia.sk) for new job offers matching your searches, keeps a deduplicated JSON archive, and pushes new listings to Telegram subscribers in real time.
 
 No browser required — listing pages are plain server-rendered HTML, so the scraper runs on `requests` + BeautifulSoup with minimal overhead.
@@ -21,6 +22,12 @@ No browser required — listing pages are plain server-rendered HTML, so the scr
 - Python 3.10+
 - [`requests`](https://pypi.org/project/requests/) ≥ 2.31
 - [`beautifulsoup4`](https://pypi.org/project/beautifulsoup4/) ≥ 4.12
+=======
+> [!IMPORTANT]
+> The project is mainly vibe coded, so it's probably poorly structured.
+
+Watches [Profesia.sk](https://www.profesia.sk) for new job offers. It runs continuously, scrapes your searches once an hour, keeps every offer (unique by ID) in `jobs.json`, and sends new ones to Telegram subscribers.
+>>>>>>> 2a8fd5264e87b6f45c4832720d23df6f8e052944
 
 ## Setup
 

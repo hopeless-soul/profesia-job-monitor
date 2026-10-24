@@ -41,7 +41,13 @@ class Bot:
 
     def call(self, method: str, http_timeout: float = 15, **params) -> object:
         for attempt in range(2):
-            resp = self.session.post(API_URL.format(token=self.token, method=method), json=params, timeout=http_timeout)
+            try:
+                resp = self.session.post(API_URL.format(token=self.token, method=method), json=params, timeout=http_timeout)
+            except requests.exceptions.RequestException as e:
+                if attempt == 0:
+                    log.warning("%s request failed (%s), retrying", method, e)
+                    continue
+                raise
             data = resp.json()
             if data.get("ok"):
                 return data["result"]

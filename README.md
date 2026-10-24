@@ -1,67 +1,87 @@
-# Profesia job monitor
+# Profesia Job Monitor
 
-Watches [Profesia.sk](https://www.profesia.sk) for new job offers. It runs continuously, scrapes your searches once an hour, keeps every offer (unique by ID) in `jobs.json`, and sends new ones to Telegram subscribers.
+A lightweight CLI daemon that watches [Profesia.sk](https://www.profesia.sk) for new job offers matching your searches, keeps a deduplicated JSON archive, and pushes new listings to Telegram subscribers in real time.
+
+No browser required — listing pages are plain server-rendered HTML, so the scraper runs on `requests` + BeautifulSoup with minimal overhead.
+
+## Features
+
+- **Multi-search monitoring** — run several keyword + filter combinations in parallel, all merged into one store
+- **Structured salary parsing** — extracts min/max, currency (EUR/CZK), and period (monthly/hourly) from Slovak-format salary strings like `Od 3 900 EUR/mesiac`
+- **Telegram notifications** — new offers are batched and pushed to subscribers via a Telegram bot; users self-manage with `/start` and `/stop`
+- **Atomic persistence** — writes go through `tempfile` → `os.replace`, so a crash never leaves a truncated `jobs.json`
+- **Offer deduplication** — unique by Profesia offer ID, with `first_seen` / `last_seen` tracking across scrapes
+- **Rich filtering** — region, remote work mode, minimum salary, recency, position type, language, and more via path segments and query params
+- **Schema-validated config** — JSON Schema for both `config.json` and `jobs.json`, with editor autocompletion in VS Code
+- **One-off searches** — run a quick search from the CLI without touching the config file
+- **Offline tests** — test suite runs against saved HTML fixtures, no network required
+
+## Requirements
+
+- Python 3.10+
+- [`requests`](https://pypi.org/project/requests/) ≥ 2.31
+- [`beautifulsoup4`](https://pypi.org/project/beautifulsoup4/) ≥ 4.12
 
 ## Setup
 
-Requires Python 3.10+.
-
-```powershell
+```bash
+git clone https://github.com/hopeless-soul/profesia-job-monitor.git
+cd profesia-job-monitor
 python -m venv .venv
-.venv\Scripts\Activate.ps1          # Linux/macOS: source .venv/bin/activate
+source .venv/bin/activate        # Windows: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-copy config.example.json config.json   # Linux/macOS: cp
+cp config.example.json config.json
 ```
 
-Edit `config.json` to set your searches (see [Configuration](#configuration)).
+Edit `config.json` with your searches — the schema provides autocompletion in VS Code.
 
-## Running
+## Usage
 
-With the virtual environment active, run from the repo folder:
+### Continuous monitoring (default)
 
-```powershell
+```bash
 python -m profesia_monitor
 ```
 
-It scrapes straight away, then every `interval` minutes (60 by default). It keeps running until you press Ctrl+C. Each round prints the offer count per search and a `NEW …` line for every offer it hasn't seen before.
+Scrapes immediately, then every `interval` minutes (default: 60). Prints a `NEW ...` line for each offer it hasn't seen before. Ctrl+C to stop.
 
-Run it as `python -m profesia_monitor`. `python profesia_monitor` doesn't work because the folder is a package, not a script.
+### One-off scrape
 
-Common options:
+```bash
+python -m profesia_monitor --once
+```
 
-| Option | Meaning |
-|---|---|
-| `--once` | Scrape once and exit |
-| `--interval 30` | Minutes between scrapes |
-| `-c other.json` | Use a different config file |
-| `--days 3` | Only offers posted in the last N days (all searches) |
-| `--pages 1` | Max listing pages per search (20 offers per page) |
-| `--out file.json` | Where to store jobs |
-| `--no-notify` | Don't send Telegram messages |
-| `--log monitor.log` | Append output to a file instead of the console |
-| `-v` | Verbose logging |
+### Quick search without config
 
-Try a one-off search without touching the config:
-
-```powershell
+```bash
 python -m profesia_monitor "c#" --segment bratislavsky-kraj --remote 2 --min-salary 2000 --once
 ```
 
-Run `python -m profesia_monitor --help` for everything.
+### CLI options
 
-### Keeping it running in the background (Windows)
+| Option | Description |
+|---|---|
+| `--once` | Scrape once and exit |
+| `--interval N` | Minutes between scrapes (default: 60) |
+| `-c FILE` | Use a different config file |
+| `--days N` | Only offers posted in the last N days |
+| `--pages N` | Max listing pages per search (20 offers/page) |
+| `--out FILE` | Where to store jobs |
+| `--no-notify` | Skip Telegram notifications |
+| `--log FILE` | Append output to a file instead of console |
+| `-v` | Verbose logging |
 
-`pythonw` runs without a console window, and `--log` captures the output:
+### Background mode (Windows)
 
 ```powershell
-Start-Process .venv\Scripts\pythonw.exe -ArgumentList "-m profesia_monitor --log monitor.log" -WorkingDirectory $PWD
+Start-Process .venv\Scripts\pythonw.exe `
+  -ArgumentList "-m profesia_monitor --log monitor.log" `
+  -WorkingDirectory $PWD
 ```
-
-To stop it, end the `pythonw.exe` process in Task Manager.
 
 ## Configuration
 
-`config.json` is read from the current folder. It is git-ignored because it holds your bot token. Its schema is in `schemas/config.schema.json`, so editors such as VS Code autocomplete and validate it.
+`config.json` is read from the working directory. It's git-ignored because it holds your bot token.
 
 ```json
 {
@@ -70,10 +90,18 @@ To stop it, end the `pythonw.exe` process in Task Manager.
   "pages": 3,
   "delay": 1.5,
   "interval": 60,
-  "count_days": 3,
+  "count_days": 7,
   "searches": [
-    { "keyword": "frontend" },
-    { "keyword": "c#", "segments": ["bratislavsky-kraj"], "remote_work": 2, "min_salary": 2000 }
+    {
+      "keyword": "c#",
+      "segments": ["bratislavsky-kraj"],
+      "remote_work": 2,
+      "min_salary": 2000
+    },
+    {
+      "keyword": "python",
+      "segments": ["informacne-technologie", "plny-uvazok"]
+    }
   ],
   "telegram": {
     "token": "123456:ABC-your-bot-token",
@@ -82,39 +110,42 @@ To stop it, end the `pythonw.exe` process in Task Manager.
 }
 ```
 
-| Key | Default | Meaning |
+### Search filters
+
+Each search supports these filter options:
+
+| Key | Values | Description |
 |---|---|---|
-| `out` | `jobs.json` | Jobs file. Relative paths resolve against the config's folder |
-| `pages` | `3` | Max pages per search |
-| `delay` | `1.5` | Seconds between page requests. Be polite to the site |
-| `interval` | `60` | Minutes between scrapes |
-| `count_days` | none | Only offers from the last N days. 31 or more means no filter. A search can override it |
-| `searches[].keyword` | required | Free-text search |
-| `searches[].segments` | `[]` | Path filters: region (`bratislavsky-kraj`), work area (`informacne-technologie`), employment type (`plny-uvazok`), language (`anglicky-jazyk`) and so on |
-| `searches[].remote_work` | any | `0` on-site, `1` remote, `2` partially remote |
-| `searches[].min_salary` | none | Minimum salary in EUR |
-| `searches[].salary_period` | `m` | `m` monthly or `h` hourly (used with `min_salary`) |
-| `searches[].count_days` | top-level value | Per-search override |
-| `telegram.token` | none | Bot token. Falls back to the `TELEGRAM_BOT_TOKEN` env variable. With neither, Telegram is off |
-| `telegram.subscribers` | `subscribers.json` | Subscriber list |
+| `keyword` | free text | Search across offer text (required) |
+| `segments` | path slugs | Region, position, employment type, work area, language |
+| `remote_work` | `0` / `1` / `2` / `null` | On-site only / remote only / partially remote / any |
+| `min_salary` | integer | Minimum salary in EUR |
+| `salary_period` | `"m"` / `"h"` | Monthly or hourly (used with `min_salary`) |
+| `count_days` | integer | Only offers from the last N days |
 
-All results from all searches are merged into one file. An offer found by several searches is stored once.
+Common path segments:
 
-`salvage.md` lists all available filters and how the site is parsed.
+| Filter | Examples |
+|---|---|
+| Region | `bratislavsky-kraj`, `zilinsky-kraj`, `kosicky-kraj`, `zahranicie` |
+| Position | `programator-programatorka`, `dotnet-programator-programatorka` |
+| Employment | `plny-uvazok`, `skrateny-uvazok`, `na-dohodu-brigady`, `zivnost` |
+| Work area | `informacne-technologie`, `elektrotechnika-a-energetika` |
+| Language | `anglicky-jazyk`, `nemecky-jazyk` |
+
+All results from all searches merge into one file. Duplicate offers (same ID) are stored once.
 
 ## Telegram notifications
 
-1. Create a bot with [@BotFather](https://t.me/BotFather) and put its token in `config.json` under `telegram.token`.
+1. Create a bot with [@BotFather](https://t.me/BotFather) and add the token to `config.json` (or set the `TELEGRAM_BOT_TOKEN` environment variable).
 2. Start the monitor.
-3. Each person who wants notifications opens the bot and sends **`/start`**. **`/stop`** unsubscribes.
+3. Users send `/start` to the bot to subscribe, `/stop` to unsubscribe.
 
-While the monitor runs, the bot answers commands within seconds. After each scrape, every subscriber gets the new offers (title linked to the offer, company, location and salary), grouped into as few messages as possible. People who block the bot are removed automatically. Subscribers are saved in `subscribers.json`.
+New offers arrive as formatted messages with title (linked), company, location, and salary. Messages are packed to fit Telegram's 4096-char limit. Subscribers who block the bot are removed automatically.
 
-Only one copy of the monitor can use a given bot at a time, because Telegram lets only one process read its messages.
+## Output format
 
-## Output
-
-`jobs.json` (format: `schemas/jobs.schema.json`):
+`jobs.json` stores deduplicated offers sorted by `first_seen` (newest first):
 
 ```json
 {
@@ -128,7 +159,13 @@ Only one copy of the monitor can use a given bot at a time, because Telegram let
       "company": "ACME s.r.o.",
       "company_id": 12345,
       "location": "Bratislava",
-      "salary": { "raw": "Od 2 500 EUR/mesiac", "min": 2500, "max": null, "currency": "EUR", "period": "month" },
+      "salary": {
+        "raw": "Od 2 500 EUR/mesiac",
+        "min": 2500,
+        "max": null,
+        "currency": "EUR",
+        "period": "month"
+      },
       "labels": [],
       "posted_text": "Nová",
       "first_seen": "2026-09-23T10:00:00+00:00",
@@ -138,13 +175,43 @@ Only one copy of the monitor can use a given bot at a time, because Telegram let
 }
 ```
 
-`first_seen` stays fixed and `last_seen` is updated on every scrape that finds the offer. Newest offers come first.
+Both `config.json` and `jobs.json` have JSON Schema definitions in `schemas/` for validation and editor support.
+
+## Architecture
+
+```
+profesia_monitor/
+├── __main__.py     CLI entry point, argument parsing, main loop
+├── config.py       Config loading and validation
+├── scraper.py      HTTP fetching with Query builder and pagination
+├── parser.py       Pure HTML parsing (BeautifulSoup, no network)
+├── models.py       Frozen dataclasses: Job, Salary
+├── store.py        JSON persistence with atomic writes and merge logic
+└── telegram.py     Bot API client, subscriber management, message formatting
+```
+
+The pipeline is deliberately simple: **scrape → parse → merge → persist → notify**. Each module has a single responsibility and no cross-dependencies beyond the shared `Job` model.
+
+Key design decisions:
+
+- **No browser engine.** Profesia listing pages are server-rendered; `requests` is sufficient and keeps the footprint minimal.
+- **Offer ID as primary key.** The original fork used `(title, company)` tuples, which collapsed reposts and missed renames. The numeric ID from `/O<id>` URLs is stable.
+- **Atomic file writes.** Both `jobs.json` and `subscribers.json` are written via `tempfile.mkstemp` → `os.replace` to prevent corruption on crash.
+- **Regex salary parser.** Handles `Od 3 900 EUR/mesiac`, `1 500 - 2 000 EUR/mesiac`, `8 EUR/hod.`, and gracefully degrades to raw text for unrecognized formats.
 
 ## Tests
 
-```powershell
+```bash
 pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-Tests run offline against saved HTML pages in `tests/fixtures/`.
+Tests run offline against saved HTML fixtures in `tests/fixtures/` — no network access needed.
+
+| Test file | Covers |
+|---|---|
+| `test_parser.py` | HTML card parsing, salary extraction, edge cases |
+| `test_scraper.py` | Query URL building, pagination logic |
+| `test_store.py` | Job merging, deduplication, atomic persistence |
+| `test_config.py` | Config validation, error messages |
+| `test_telegram.py` | Bot commands, subscriber management, message batching |

@@ -113,7 +113,7 @@ def run_once(config: Config, bot: Bot | None, subs: Subscribers | None) -> None:
         if notify(bot, subs, added):
             subs.save()
         if added:
-            print(f"Notified {len(subs.chats)} Telegram subscriber(s)")
+            print(f"Notified {len(subs.chats)} Telegram subscriber(s) \n\n")
 
 
 def sync_subscribers(bot: Bot, subs: Subscribers, timeout: int = 0) -> None:

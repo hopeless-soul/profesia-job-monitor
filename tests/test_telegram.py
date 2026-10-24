@@ -1,6 +1,10 @@
+import pytest
+import requests
+
 from profesia_monitor.models import Job
 from profesia_monitor.telegram import (
     MAX_MESSAGE_LEN,
+    Bot,
     Subscribers,
     TelegramError,
     build_messages,
@@ -54,6 +58,45 @@ def test_messages_fit_telegram_limit_and_escape_html():
     assert all(len(m) <= MAX_MESSAGE_LEN for m in messages)
     assert "ACME &lt;s.r.o.&gt;" in messages[0]
     assert sum(m.count("<a href") for m in messages) == 50
+
+
+class FakeResponse:
+    def __init__(self, data):
+        self._data = data
+
+    def json(self):
+        return self._data
+
+
+class FlakySession:
+    """Raises a network timeout on the first `fail_times` calls, then succeeds."""
+
+    def __init__(self, fail_times):
+        self.fail_times = fail_times
+        self.calls = 0
+
+    def post(self, *args, **kwargs):
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise requests.exceptions.ReadTimeout("timed out")
+        return FakeResponse({"ok": True, "result": []})
+
+
+def test_call_retries_once_after_a_network_timeout():
+    session = FlakySession(fail_times=1)
+    bot = Bot("token", session=session)
+
+    assert bot.get_updates(0, timeout=30) == []
+    assert session.calls == 2
+
+
+def test_call_gives_up_after_two_network_timeouts():
+    session = FlakySession(fail_times=2)
+    bot = Bot("token", session=session)
+
+    with pytest.raises(requests.exceptions.ReadTimeout):
+        bot.get_updates(0, timeout=30)
+    assert session.calls == 2
 
 
 def test_notify_drops_chats_that_blocked_the_bot(tmp_path):

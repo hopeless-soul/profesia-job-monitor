@@ -70,6 +70,46 @@
           "description": "Subscriber list and update offset. Relative paths resolve against the config file's folder."
         }
       }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "anthropic",
+            "openai",
+            "google"
+          ],
+          "default": "anthropic",
+          "description": "LLM backend. The matching langchain-* package must be installed and the provider's API key present in the env (ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY)."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Model id. null uses the per-provider default: anthropic=claude-sonnet-4-5, openai=gpt-4o-mini, google=gemini-2.5-flash."
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 0.0,
+          "description": "Sampling temperature. 0 is recommended for consistent verdicts."
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1024,
+          "description": "Max output tokens (mapped to max_output_tokens for the google provider)."
+        }
+      },
+      "required": [
+        "provider"
+      ]
     }
   },
   "$defs": {

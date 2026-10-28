@@ -24,5 +24,11 @@
   "telegram": {
     "token": null,
     "subscribers": "subscribers.json"
+  },
+  "model": {
+    "provider": "google",
+    "name": "gemini-3.5-flash",
+    "temperature": 0.0,
+    "max_tokens": 1024
   }
 }

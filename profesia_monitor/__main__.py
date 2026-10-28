@@ -30,34 +30,88 @@ DEFAULT_CONFIG = Path("config.json")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="profesia_monitor", description="Scrape Profesia.sk offers into a JSON file.")
-    p.add_argument("keyword", nargs="?", help="one-off search text; when given, the config's searches are ignored")
-    p.add_argument("-c", "--config", type=Path, default=DEFAULT_CONFIG, help="config file (default: config.json)")
+    p = argparse.ArgumentParser(
+        prog="profesia_monitor",
+        description="Scrape Profesia.sk offers into a JSON file.",
+    )
+    p.add_argument(
+        "keyword",
+        nargs="?",
+        help="one-off search text; when given, the config's searches are ignored",
+    )
+    p.add_argument(
+        "-c",
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG,
+        help="config file (default: config.json)",
+    )
     p.add_argument("--out", type=Path, help="JSON store (overrides config)")
-    p.add_argument("--pages", type=int, help="max listing pages per search (overrides config)")
-    p.add_argument("--delay", type=float, help="seconds between page requests (overrides config)")
-    p.add_argument("--days", type=int, metavar="N", help="only offers posted in the last N days (overrides config for every search)")
+    p.add_argument(
+        "--pages", type=int, help="max listing pages per search (overrides config)"
+    )
+    p.add_argument(
+        "--delay", type=float, help="seconds between page requests (overrides config)"
+    )
+    p.add_argument(
+        "--days",
+        type=int,
+        metavar="N",
+        help="only offers posted in the last N days (overrides config for every search)",
+    )
     filters = p.add_argument_group("one-off search filters (require KEYWORD)")
-    filters.add_argument("--segment", action="append", default=[], metavar="SLUG",
-                         help="path filter, repeatable, e.g. bratislavsky-kraj, plny-uvazok")
-    filters.add_argument("--remote", type=int, choices=[0, 1, 2],
-                         help="0 on-site only, 1 remote only, 2 partially remote")
+    filters.add_argument(
+        "--segment",
+        action="append",
+        default=[],
+        metavar="SLUG",
+        help="path filter, repeatable, e.g. bratislavsky-kraj, plny-uvazok",
+    )
+    filters.add_argument(
+        "--remote",
+        type=int,
+        choices=[0, 1, 2],
+        help="0 on-site only, 1 remote only, 2 partially remote",
+    )
     filters.add_argument("--min-salary", type=int, help="minimum salary in EUR")
-    filters.add_argument("--salary-period", choices=["m", "h"], default="m", help="m = monthly, h = hourly")
-    p.add_argument("--interval", type=float, metavar="MINUTES",
-                   help="minutes between scrapes (overrides config, default 60)")
-    p.add_argument("--once", action="store_true", help="scrape once and exit instead of running forever")
-    p.add_argument("--no-notify", action="store_true", help="don't send Telegram messages")
-    p.add_argument("--log", type=Path, metavar="FILE",
-                   help="append all output to FILE (for scheduled runs without a console)")
+    filters.add_argument(
+        "--salary-period",
+        choices=["m", "h"],
+        default="m",
+        help="m = monthly, h = hourly",
+    )
+    p.add_argument(
+        "--interval",
+        type=float,
+        metavar="MINUTES",
+        help="minutes between scrapes (overrides config, default 60)",
+    )
+    p.add_argument(
+        "--once",
+        action="store_true",
+        help="scrape once and exit instead of running forever",
+    )
+    p.add_argument(
+        "--no-notify", action="store_true", help="don't send Telegram messages"
+    )
+    p.add_argument(
+        "--log",
+        type=Path,
+        metavar="FILE",
+        help="append all output to FILE (for scheduled runs without a console)",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
 
 def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Config:
     """Merge config file and CLI flags. CLI flags win."""
-    if args.keyword is None and (args.segment or args.remote is not None or args.min_salary is not None):
-        parser.error("search filters need a KEYWORD; put them in the config file instead")
+    if args.keyword is None and (
+        args.segment or args.remote is not None or args.min_salary is not None
+    ):
+        parser.error(
+            "search filters need a KEYWORD; put them in the config file instead"
+        )
 
     config_given = args.config != DEFAULT_CONFIG
     if args.config.exists():
@@ -66,12 +120,16 @@ def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         except ConfigError as e:
             parser.error(f"{args.config}: {e}")
     elif config_given or args.keyword is None:
-        parser.error(f"{args.config} not found; copy config.example.json to config.json or pass a KEYWORD")
+        parser.error(
+            f"{args.config} not found; copy config.example.json to config.json or pass a KEYWORD"
+        )
     else:
         config = Config()
 
     if args.keyword is not None:
-        query = Query(args.keyword, args.segment, args.remote, args.min_salary, args.salary_period)
+        query = Query(
+            args.keyword, args.segment, args.remote, args.min_salary, args.salary_period
+        )
         try:
             query.url()
         except ValueError as e:
@@ -107,7 +165,9 @@ def run_once(config: Config, bot: Bot | None, subs: Subscribers | None) -> None:
     for job in added:
         salary = job.salary.raw if job.salary else "-"
         print(f"NEW {job.id}  {job.title} | {job.company} | {salary}")
-    print(f"Scraped {len(scraped)}, new {len(added)}, total {len(merged)} in {config.out}")
+    print(
+        f"Scraped {len(scraped)}, new {len(added)}, total {len(merged)} in {config.out}"
+    )
 
     if bot and subs:
         if notify(bot, subs, added):
@@ -127,7 +187,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.log:
         sys.stdout = sys.stderr = open(args.log, "a", encoding="utf-8", buffering=1)
         print(f"--- {datetime.now().isoformat(timespec='seconds')}")
-    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO if args.verbose else logging.WARNING,
+        format="%(levelname)s %(message)s",
+    )
     config = resolve_config(args, parser)
 
     bot = subs = None
@@ -138,7 +201,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.once:
         if bot and subs:
             try:
-                sync_subscribers(bot, subs)  # pick up /start and /stop sent since the last run
+                sync_subscribers(
+                    bot, subs
+                )  # pick up /start and /stop sent since the last run
             except TelegramError as e:
                 if e.code == 401:
                     parser.error("Telegram rejected the bot token")
@@ -148,7 +213,9 @@ def main(argv: list[str] | None = None) -> int:
 
     interval = config.interval * 60
     next_run = time.monotonic()
-    bot_note = f", {len(subs.chats)} Telegram subscriber(s)" if subs else ", Telegram off"
+    bot_note = (
+        f", {len(subs.chats)} Telegram subscriber(s)" if subs else ", Telegram off"
+    )
     print(f"Running: scraping every {config.interval:g} min{bot_note}. Ctrl+C to stop.")
     try:
         while True:

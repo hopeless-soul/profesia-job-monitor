@@ -9,8 +9,9 @@ from pathlib import Path
 from .scraper import Query
 
 _QUERY_KEYS = {"keyword", "segments", "remote_work", "min_salary", "salary_period", "count_days"}
-_TOP_KEYS = {"$schema", "out", "pages", "delay", "count_days", "searches", "telegram", "interval"}
+_TOP_KEYS = {"$schema", "out", "pages", "delay", "count_days", "searches", "telegram", "interval", "model"}
 _TELEGRAM_KEYS = {"token", "subscribers"}
+_MODEL_KEYS = {"provider", "name", "temperature", "max_tokens"}
 
 
 class ConfigError(ValueError):
@@ -22,6 +23,16 @@ class TelegramConfig:
     token: str | None = None  # falls back to the TELEGRAM_BOT_TOKEN env var
     subscribers: Path = Path("subscribers.json")
 
+@dataclass
+class ModelConfig:
+    # "anthropic" or "openai". The matching langchain-* package must be installed
+    # and the provider's API key present in the environment.
+    provider: str = "anthropic"
+    # Model name. Sensible default per provider is filled in when left blank.
+    name: str | None = None
+    temperature: float = 0.0
+    max_tokens: int = 1024
+
 
 @dataclass
 class Config:
@@ -31,6 +42,7 @@ class Config:
     delay: float = 1.5
     interval: float = 60  # minutes between scrapes
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
 
 
 def _count_days(value: object, where: str) -> int | None:
@@ -85,6 +97,28 @@ def _telegram(raw: object) -> TelegramConfig:
     return TelegramConfig(token or None, Path(subscribers))
 
 
+def _model(raw: object) -> ModelConfig:
+    if raw is None:
+        return ModelConfig()
+    if not isinstance(raw, dict):
+        raise ConfigError("model: expected an object")
+    if unknown := raw.keys() - _MODEL_KEYS:
+        raise ConfigError(f"model: unknown keys {sorted(unknown)}")
+    provider = raw.get("provider", "anthropic")
+    if not isinstance(provider, str) or provider not in ("anthropic", "openai", "google"):
+        raise ConfigError("model.provider: expected 'anthropic', 'openai', or 'google'")
+    name = raw.get("name")
+    if name is not None and not isinstance(name, str):
+        raise ConfigError("model.name: expected a string or null")
+    temperature = raw.get("temperature", 0.0)
+    if not isinstance(temperature, (int, float)) or isinstance(temperature, bool) or not (0 <= temperature <= 2):
+        raise ConfigError("model.temperature: expected a number between 0 and 2")
+    max_tokens = raw.get("max_tokens", 1024)
+    if not isinstance(max_tokens, int) or max_tokens < 1:
+        raise ConfigError("model.max_tokens: expected a positive integer")
+    return ModelConfig(provider, name, float(temperature), max_tokens)
+
+
 def parse_config(data: object) -> Config:
     if not isinstance(data, dict):
         raise ConfigError("config: expected an object")
@@ -115,6 +149,7 @@ def parse_config(data: object) -> Config:
         delay=float(delay),
         interval=float(interval),
         telegram=_telegram(data.get("telegram")),
+        model=_model(data.get("model")),
     )
 
 

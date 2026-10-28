@@ -1,4 +1,4 @@
-"""JSON job store, unique by offer ID. Format: schemas/jobs.schema.json."""
+# JSON job store, unique by offer ID. Format: schemas/jobs.schema.json.
 
 from __future__ import annotations
 
@@ -30,11 +30,10 @@ def load_jobs(path: Path) -> list[Job]:
 def merge_jobs(
     existing: list[Job], scraped: list[Job], seen_at: str | None = None
 ) -> tuple[list[Job], list[Job]]:
-    """Merge scraped jobs into existing ones by `id`.
-
-    Known jobs get fresh scraped fields and `last_seen`, keeping `first_seen`.
-    Returns (all jobs, newly added jobs).
-    """
+    # Merge scraped jobs into existing ones by `id`.
+    #
+    # Known jobs get fresh scraped fields and `last_seen`, keeping `first_seen`.
+    # Returns (all jobs, newly added jobs).
     seen_at = seen_at or now_iso()
     by_id = {job.id: job for job in existing}
     added: list[Job] = []
@@ -52,7 +51,7 @@ def merge_jobs(
 
 
 def save_jobs(path: Path, jobs: list[Job]) -> None:
-    """Write atomically so a crash never leaves a truncated file."""
+    # Write atomically so a crash never leaves a truncated file.
     data = {
         "schema_version": SCHEMA_VERSION,
         "updated_at": now_iso(),

@@ -1,4 +1,4 @@
-"""Fetch Profesia.sk listing pages. See salvage.md for URL structure and filters."""
+# Fetch Profesia.sk listing pages. See salvage.md for URL structure and filters.
 
 from __future__ import annotations
 
@@ -64,11 +64,10 @@ def scrape(
     delay: float = 1.5,
     session: requests.Session | None = None,
 ) -> list[Job]:
-    """Scrape up to `max_pages` pages. Duplicate IDs across pages are dropped.
-
-    A failure on the first page raises; a failure on a later page is logged and
-    the jobs collected so far are returned.
-    """
+    # Scrape up to `max_pages` pages. Duplicate IDs across pages are dropped.
+    #
+    # A failure on the first page raises; a failure on a later page is logged and
+    # the jobs collected so far are returned.
     session = session or requests.Session()
     session.headers.setdefault("User-Agent", USER_AGENT)
     url = query.url()

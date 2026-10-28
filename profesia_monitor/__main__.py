@@ -105,7 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Config:
-    """Merge config file and CLI flags. CLI flags win."""
+    # Merge config file and CLI flags. CLI flags win.
     if args.keyword is None and (
         args.segment or args.remote is not None or args.min_salary is not None
     ):
@@ -113,6 +113,7 @@ def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
             "search filters need a KEYWORD; put them in the config file instead"
         )
 
+    # Load config
     config_given = args.config != DEFAULT_CONFIG
     if args.config.exists():
         try:
@@ -120,12 +121,14 @@ def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         except ConfigError as e:
             parser.error(f"{args.config}: {e}")
     elif config_given or args.keyword is None:
+        # require either explicit config or a one-off keyword
         parser.error(
             f"{args.config} not found; copy config.example.json to config.json or pass a KEYWORD"
         )
     else:
         config = Config()
 
+    # one-off keyword search overrides all config searches
     if args.keyword is not None:
         query = Query(
             args.keyword, args.segment, args.remote, args.min_salary, args.salary_period
@@ -135,22 +138,32 @@ def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         except ValueError as e:
             parser.error(str(e))
         config.searches = [query]
+    
+    # apply days filter to all searches
     if args.days is not None:
         for query in config.searches:
             query.count_days = args.days
+    
+    # override output file location
     if args.out is not None:
         config.out = args.out
+    
+    # override max pages per search
     if args.pages is not None:
         config.pages = args.pages
+    
+    # override request delay
     if args.delay is not None:
         config.delay = args.delay
+    
+    # override scrape interval, must be positive
     if args.interval is not None:
         if args.interval <= 0:
             parser.error("--interval must be positive")
         config.interval = args.interval
     return config
 
-
+# Run Scrape Once 
 def run_once(config: Config, bot: Bot | None, subs: Subscribers | None) -> None:
     scraped: list[Job] = []
     for query in config.searches:
@@ -175,13 +188,14 @@ def run_once(config: Config, bot: Bot | None, subs: Subscribers | None) -> None:
         if added:
             print(f"Notified {len(subs.chats)} Telegram subscriber(s) \n\n")
 
-
+#
 def sync_subscribers(bot: Bot, subs: Subscribers, timeout: int = 0) -> None:
     if handle_updates(bot, subs, timeout):
         subs.save()
 
-
+# Main
 def main(argv: list[str] | None = None) -> int:
+    # Load run args
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.log:
@@ -191,13 +205,17 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.INFO if args.verbose else logging.WARNING,
         format="%(levelname)s %(message)s",
     )
+
+    # Load config
     config = resolve_config(args, parser)
 
+    # Bot setup
     bot = subs = None
     token = config.telegram.token or os.environ.get("TELEGRAM_BOT_TOKEN")
     if token and not args.no_notify:
         bot, subs = Bot(token), Subscribers.load(config.telegram.subscribers)
 
+    # Run Once Scenario
     if args.once:
         if bot and subs:
             try:
@@ -211,6 +229,7 @@ def main(argv: list[str] | None = None) -> int:
         run_once(config, bot, subs)
         return 0
 
+    # CRON
     interval = config.interval * 60
     next_run = time.monotonic()
     bot_note = (

@@ -69,7 +69,7 @@ class FakeResponse:
 
 
 class FlakySession:
-    """Raises a network timeout on the first `fail_times` calls, then succeeds."""
+    # Raises a network timeout on the first `fail_times` calls, then succeeds.
 
     def __init__(self, fail_times):
         self.fail_times = fail_times

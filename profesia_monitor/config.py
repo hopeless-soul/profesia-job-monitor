@@ -1,4 +1,4 @@
-"""Load config.json. See config.example.json for the format."""
+# Load config.json. See config.example.json for the format.
 
 from __future__ import annotations
 
@@ -154,7 +154,7 @@ def parse_config(data: object) -> Config:
 
 
 def load_config(path: Path) -> Config:
-    """Load and validate a config file. Relative paths resolve against the config's folder."""
+    # Load and validate a config file. Relative paths resolve against the config's folder.
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:

@@ -1,4 +1,4 @@
-"""Job data model. Field layout mirrors schemas/jobs.schema.json."""
+# Job data model. Field layout mirrors schemas/jobs.schema.json.
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Profesia.sk job scraper with a de-duplicated JSON store."""
+# Profesia.sk job scraper with a de-duplicated JSON store.
 
 from .models import Job, Salary
 from .scraper import Query, scrape

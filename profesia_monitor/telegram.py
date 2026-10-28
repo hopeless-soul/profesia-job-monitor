@@ -1,9 +1,8 @@
-"""Telegram notifications. Users subscribe with /start and unsubscribe with /stop.
-
-Uses long polling (getUpdates), so no webhook or public server is needed.
-subscribers.json keeps the chat list plus the update offset, so each command
-is handled once.
-"""
+# Telegram notifications. Users subscribe with /start and unsubscribe with /stop.
+#
+# Uses long polling (getUpdates), so no webhook or public server is needed.
+# subscribers.json keeps the chat list plus the update offset, so each command
+# is handled once.
 
 from __future__ import annotations
 
@@ -106,12 +105,12 @@ class Subscribers:
 
 
 def _command(text: str) -> str:
-    """'/start@MyBot payload' -> '/start'."""
+    # '/start@MyBot payload' -> '/start'.
     return text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
 
 
 def handle_updates(bot: Bot, subs: Subscribers, timeout: int = 0) -> bool:
-    """Fetch pending messages and apply /start and /stop. Returns True if subs changed."""
+    # Fetch pending messages and apply /start and /stop. Returns True if subs changed.
     updates = bot.get_updates(subs.offset, timeout)
     changed = False
     for update in updates:
@@ -153,7 +152,7 @@ def format_job(job: Job) -> str:
 
 
 def build_messages(jobs: list[Job]) -> list[str]:
-    """Pack jobs into as few messages as fit Telegram's length limit."""
+    # Pack jobs into as few messages as fit Telegram's length limit.
     messages: list[str] = []
     current = f"🆕 <b>{len(jobs)} new offer{'s' if len(jobs) != 1 else ''} on Profesia.sk</b>"
     for block in map(format_job, jobs):
@@ -167,7 +166,7 @@ def build_messages(jobs: list[Job]) -> list[str]:
 
 
 def notify(bot: Bot, subs: Subscribers, jobs: list[Job]) -> bool:
-    """Send jobs to every subscriber. Drops chats that blocked the bot. Returns True if subs changed."""
+    # Send jobs to every subscriber. Drops chats that blocked the bot. Returns True if subs changed.
     if not jobs or not subs.chats:
         return False
     messages = build_messages(jobs)

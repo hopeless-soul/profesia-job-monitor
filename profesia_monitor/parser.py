@@ -1,4 +1,4 @@
-"""Pure HTML parsing for Profesia.sk listing pages. No network access here."""
+# Pure HTML parsing for Profesia.sk listing pages. No network access here.
 
 from __future__ import annotations
 
@@ -30,10 +30,9 @@ def _number(text: str) -> float | int:
 
 
 def parse_salary(text: str | None) -> Salary | None:
-    """Parse e.g. 'Od 3 900 EUR/mesiac' or '1 500 - 2 000 EUR/mesiac'.
-
-    Unrecognised formats keep the raw text with the structured fields set to None.
-    """
+    # Parse e.g. 'Od 3 900 EUR/mesiac' or '1 500 - 2 000 EUR/mesiac'.
+    #
+    # Unrecognised formats keep the raw text with the structured fields set to None.
     if not text or not (raw := _clean(text)):
         return None
     m = _SALARY_RE.match(raw)
@@ -59,7 +58,7 @@ def _text(row: Tag, selector: str) -> str | None:
 
 
 def parse_row(row: Tag) -> Job | None:
-    """Parse one `li.list-row` card. Returns None for rows that are not offers."""
+    # Parse one `li.list-row` card. Returns None for rows that are not offers.
     link = row.select_one("h2 a[id^=offer]")
     if not link:
         return None
@@ -91,7 +90,7 @@ def parse_row(row: Tag) -> Job | None:
 
 
 def parse_listing(html: str) -> tuple[list[Job], bool]:
-    """Return (jobs on this page, whether a next page exists)."""
+    # Return (jobs on this page, whether a next page exists).
     soup = BeautifulSoup(html, "html.parser")
     jobs = [job for row in soup.select("li.list-row") if (job := parse_row(row))]
     has_next = soup.select_one("ul.pagination a.next") is not None

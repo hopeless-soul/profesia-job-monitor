@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/hopeless-soul/Profesia-job-monitor/schemas/config.schema.json",
   "title": "Profesia job monitor config",
-  "description": "Read from config.json by default. Every search is scraped and merged into the same jobs file. Filter values are documented in salvage.md.",
+  "description": "Read from data/config.json by default. Every search is scraped and stored in the same SQLite database. Filter values are documented in salvage.md.",
   "type": "object",
   "required": [
     "searches"
@@ -12,10 +12,15 @@
     "$schema": {
       "type": "string"
     },
-    "out": {
+    "db": {
       "type": "string",
-      "default": "jobs.json",
-      "description": "Jobs file. Relative paths resolve against the config file's folder."
+      "default": "jobs.db",
+      "description": "SQLite offer database. Relative paths resolve against the config file's folder."
+    },
+    "backstory": {
+      "type": "string",
+      "default": "backstory.md",
+      "description": "Candidate backstory (markdown) the offer reviewer compares offers against. Relative paths resolve against the config file's folder. Keep it out of git."
     },
     "pages": {
       "type": "integer",
@@ -83,7 +88,7 @@
             "google"
           ],
           "default": "anthropic",
-          "description": "LLM backend. The matching langchain-* package must be installed and the provider's API key present in the env (ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY)."
+          "description": "LLM backend. The matching langchain-* package must be installed and an API key given via api_key or the provider's env var."
         },
         "name": {
           "type": [
@@ -103,8 +108,16 @@
         "max_tokens": {
           "type": "integer",
           "minimum": 1,
-          "default": 1024,
-          "description": "Max output tokens (mapped to max_output_tokens for the google provider)."
+          "default": 8192,
+          "description": "Max output tokens per LLM call. Thinking models (e.g. Gemini 2.5+) spend part of it on reasoning, so values around 1024 truncate the verdict."
+        },
+        "api_key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "description": "Provider API key. Null falls back to the provider's env var (ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY). Keep it out of git."
         }
       },
       "required": [

@@ -1,13 +1,16 @@
-"""CLI. By default runs forever, scraping every search in config.json once per
+"""CLI. By default runs forever, scraping every search in data/config.json once per
 `interval` minutes (default 60). Ctrl+C stops it.
 
     python -m profesia_monitor
     python -m profesia_monitor --interval 30        # scrape every 30 min
     python -m profesia_monitor --once               # single run, then exit
     python -m profesia_monitor "c#" --remote 2 --once   # one-off search, ignores config searches
+    python -m profesia_monitor --import-json jobs.json  # one-time import of the old JSON store
 
-With a Telegram token (config telegram.token or TELEGRAM_BOT_TOKEN), new offers
-are sent to everyone who sent /start to the bot.
+Offers are stored in SQLite (config `db`). With a Telegram token (config
+telegram.token or TELEGRAM_BOT_TOKEN), each new offer is sent to everyone who
+sent /start to the bot. With an LLM configured (config `model`), every new
+offer then gets a verdict that is saved and added to its Telegram message.
 """
 
 from __future__ import annotations
@@ -17,22 +20,31 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import closing
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 from .config import Config, ConfigError, load_config
-from .models import Job
+from .models import Job, Verdict
 from .scraper import Query, scrape
-from .store import load_jobs, merge_jobs, save_jobs
-from .telegram import Bot, Subscribers, TelegramError, handle_updates, notify
+from .store import connect, count_jobs, insert_jobs, load_jobs, save_message_ids, save_verdict, upsert_jobs
+from .telegram import Bot, Subscribers, TelegramError, format_verdict, handle_updates, notify
 
-DEFAULT_CONFIG = Path("config.json")
+# Runtime files (config, jobs.db, subscribers, backstory) live in data/, shared with Docker's /data volume
+DEFAULT_CONFIG = Path("data/config.json")
+
+# Background workers for verdicts, so scraping and /start replies never wait on the LLM
+VERDICTS = ThreadPoolExecutor(max_workers=2, thread_name_prefix="verdict")
 
 
+# CLI arguments
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="profesia_monitor",
-        description="Scrape Profesia.sk offers into a JSON file.",
+        description="Scrape Profesia.sk offers into a SQLite database.",
     )
     p.add_argument(
         "keyword",
@@ -44,9 +56,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         default=DEFAULT_CONFIG,
-        help="config file (default: config.json)",
+        help="config file (default: data/config.json)",
     )
-    p.add_argument("--out", type=Path, help="JSON store (overrides config)")
+    p.add_argument("--db", type=Path, help="SQLite database (overrides config)")
     p.add_argument(
         "--pages", type=int, help="max listing pages per search (overrides config)"
     )
@@ -92,6 +104,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="scrape once and exit instead of running forever",
     )
     p.add_argument(
+        "--import-json",
+        type=Path,
+        metavar="FILE",
+        help="import offers from an old jobs.json into the database, then exit",
+    )
+    p.add_argument(
         "--no-notify", action="store_true", help="don't send Telegram messages"
     )
     p.add_argument(
@@ -123,7 +141,7 @@ def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
     elif config_given or args.keyword is None:
         # require either explicit config or a one-off keyword
         parser.error(
-            f"{args.config} not found; copy config.example.json to config.json or pass a KEYWORD"
+            f"{args.config} not found; copy data/config.example.json to data/config.json or pass a KEYWORD"
         )
     else:
         config = Config()
@@ -138,24 +156,24 @@ def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         except ValueError as e:
             parser.error(str(e))
         config.searches = [query]
-    
+
     # apply days filter to all searches
     if args.days is not None:
         for query in config.searches:
             query.count_days = args.days
-    
-    # override output file location
-    if args.out is not None:
-        config.out = args.out
-    
+
+    # override database location
+    if args.db is not None:
+        config.db = args.db
+
     # override max pages per search
     if args.pages is not None:
         config.pages = args.pages
-    
+
     # override request delay
     if args.delay is not None:
         config.delay = args.delay
-    
+
     # override scrape interval, must be positive
     if args.interval is not None:
         if args.interval <= 0:
@@ -163,35 +181,96 @@ def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         config.interval = args.interval
     return config
 
-# Run Scrape Once 
-def run_once(config: Config, bot: Bot | None, subs: Subscribers | None) -> None:
+# Run Scrape Once
+def run_once(
+    config: Config,
+    bot: Bot | None,
+    subs: Subscribers | None,
+    review: Callable[[str], Verdict] | None = None,
+) -> None:
+    # scrape every search
     scraped: list[Job] = []
     for query in config.searches:
         jobs = scrape(query, max_pages=config.pages, delay=config.delay)
         print(f"{' '.join([repr(query.keyword), *query.segments])}: {len(jobs)} offers")
         scraped.extend(jobs)
 
-    existing = load_jobs(config.out)
-    merged, added = merge_jobs(existing, scraped)
-    save_jobs(config.out, merged)
+    # store offers; new ones get a uuid and no verdict yet
+    with closing(connect(config.db)) as conn, conn:
+        added = upsert_jobs(conn, scraped)
+        total = count_jobs(conn)
 
+    # print new offers and totals
     for job in added:
         salary = job.salary.raw if job.salary else "-"
         print(f"NEW {job.id}  {job.title} | {job.company} | {salary}")
     print(
-        f"Scraped {len(scraped)}, new {len(added)}, total {len(merged)} in {config.out}"
+        f"Scraped {len(scraped)}, new {len(added)}, total {total} in {config.db}"
     )
 
-    if bot and subs:
-        if notify(bot, subs, added):
+    # notify subscribers and remember which message each chat got
+    message_ids: dict[str, dict[int, int]] = {}
+    if bot and subs and added:
+        changed, message_ids = notify(bot, subs, added)
+        if changed:
             subs.save()
-        if added:
-            print(f"Notified {len(subs.chats)} Telegram subscriber(s) \n\n")
+        with closing(connect(config.db)) as conn, conn:
+            for offer_uuid, ids in message_ids.items():
+                save_message_ids(conn, offer_uuid, ids)
+        print(f"Notified {len(subs.chats)} Telegram subscriber(s) \n\n")
 
-#
+    # start a verdict per new offer; on_verdict runs when each one finishes
+    if review:
+        for job in added:
+            future = VERDICTS.submit(review, job.url)
+            future.add_done_callback(partial(on_verdict, config.db, bot, job, message_ids.get(job.uuid, {})))
+
+
+# Verdict callback: save it, add it to the offer's Telegram messages, log it
+def on_verdict(db: Path, bot: Bot | None, job: Job, message_ids: dict[int, int], future: Future) -> None:
+    # skip cancelled reviews (Ctrl+C), only log failed ones
+    if future.cancelled():
+        return
+    try:
+        job.verdict = future.result()
+    except Exception:
+        logging.exception("verdict failed for offer %s", job.id)
+        return
+
+    # save to the database (own connection: callbacks run in worker threads)
+    with closing(connect(db)) as conn, conn:
+        save_verdict(conn, job.uuid, job.verdict)
+
+    # edit every subscriber's message for this offer
+    if bot:
+        text = format_verdict(job)
+        for chat_id, message_id in message_ids.items():
+            try:
+                bot.edit(chat_id, message_id, text)
+            except TelegramError as e:
+                logging.warning("verdict edit for offer %s in chat %s failed: %s", job.id, chat_id, e)
+
+    logging.info("verdict %s for offer %s (uuid %s)", job.verdict.tag, job.id, job.uuid)
+
+
+# Apply /start and /stop commands sent to the bot
 def sync_subscribers(bot: Bot, subs: Subscribers, timeout: int = 0) -> None:
     if handle_updates(bot, subs, timeout):
         subs.save()
+
+
+# Verdict pipeline (orchestrator agent); None when langchain, the API key or the backstory is missing
+def build_review(config: Config) -> Callable[[str], Verdict] | None:
+    try:
+        from .agents.llm import build_llm
+        from .agents.orchestrator import build_orchestrator, evaluate
+
+        backstory = config.backstory.read_text(encoding="utf-8")
+        return partial(evaluate, build_orchestrator(build_llm(config.model), backstory))
+    except Exception as e:
+        logging.warning("verdicts disabled: %s", e)
+        return None
+
 
 # Main
 def main(argv: list[str] | None = None) -> int:
@@ -209,11 +288,24 @@ def main(argv: list[str] | None = None) -> int:
     # Load config
     config = resolve_config(args, parser)
 
+    # Import Legacy JSON Scenario
+    if args.import_json:
+        if not args.import_json.exists():
+            parser.error(f"{args.import_json} not found")
+        jobs = load_jobs(args.import_json)
+        with closing(connect(config.db)) as conn, conn:
+            inserted = insert_jobs(conn, jobs)
+        print(f"Imported {inserted} of {len(jobs)} offers from {args.import_json} into {config.db}")
+        return 0
+
     # Bot setup
     bot = subs = None
     token = config.telegram.token or os.environ.get("TELEGRAM_BOT_TOKEN")
     if token and not args.no_notify:
         bot, subs = Bot(token), Subscribers.load(config.telegram.subscribers)
+
+    # Verdict agent setup
+    review = build_review(config)
 
     # Run Once Scenario
     if args.once:
@@ -226,7 +318,9 @@ def main(argv: list[str] | None = None) -> int:
                 if e.code == 401:
                     parser.error("Telegram rejected the bot token")
                 logging.warning("subscriber sync skipped: %s", e)
-        run_once(config, bot, subs)
+        run_once(config, bot, subs, review)
+        # wait for pending verdicts before exiting
+        VERDICTS.shutdown(wait=True)
         return 0
 
     # CRON
@@ -235,13 +329,14 @@ def main(argv: list[str] | None = None) -> int:
     bot_note = (
         f", {len(subs.chats)} Telegram subscriber(s)" if subs else ", Telegram off"
     )
-    print(f"Running: scraping every {config.interval:g} min{bot_note}. Ctrl+C to stop.")
+    verdict_note = ", verdicts on" if review else ", verdicts off"
+    print(f"Running: scraping every {config.interval:g} min{bot_note}{verdict_note}. Ctrl+C to stop.")
     try:
         while True:
             try:
                 if time.monotonic() >= next_run:
                     next_run = time.monotonic() + interval
-                    run_once(config, bot, subs)
+                    run_once(config, bot, subs, review)
                 wait = max(0, int(next_run - time.monotonic()))
                 if bot and subs:
                     # Long-poll so /start and /stop get answered right away between scrapes.
@@ -258,6 +353,8 @@ def main(argv: list[str] | None = None) -> int:
                 logging.exception("run failed; retrying in 30 s")
                 time.sleep(30)
     except KeyboardInterrupt:
+        # drop queued verdicts; ones already running finish before exit
+        VERDICTS.shutdown(wait=False, cancel_futures=True)
         return 0
 
 

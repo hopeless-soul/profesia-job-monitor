@@ -1,7 +1,7 @@
-# Profesia.sk job scraper with a de-duplicated JSON store.
+# Profesia.sk job scraper with a de-duplicated SQLite store and AI verdicts.
 
-from .models import Job, Salary
+from .models import Job, Salary, Verdict
 from .scraper import Query, scrape
-from .store import load_jobs, merge_jobs, save_jobs
+from .store import connect, load_jobs, upsert_jobs
 
-__all__ = ["Job", "Salary", "Query", "scrape", "load_jobs", "merge_jobs", "save_jobs"]
+__all__ = ["Job", "Salary", "Verdict", "Query", "scrape", "connect", "load_jobs", "upsert_jobs"]

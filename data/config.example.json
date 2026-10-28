@@ -1,6 +1,7 @@
 {
-  "$schema": "./schemas/config.schema.json",
-  "out": "jobs.json",
+  "$schema": "../schemas/config.schema.json",
+  "db": "jobs.db",
+  "backstory": "backstory.md",
   "pages": 3,
   "delay": 1.5,
   "interval": 60,
@@ -29,6 +30,7 @@
     "provider": "google",
     "name": "gemini-3.5-flash",
     "temperature": 0.0,
-    "max_tokens": 1024
+    "max_tokens": 8192,
+    "api_key": null
   }
 }

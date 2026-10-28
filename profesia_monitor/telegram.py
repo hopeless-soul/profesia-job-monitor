@@ -24,6 +24,7 @@ log = logging.getLogger(__name__)
 
 API_URL = "https://api.telegram.org/bot{token}/{method}"
 MAX_MESSAGE_LEN = 4096
+VERDICT_EMOJI = {"GO": "🟢", "STRETCH": "🟡", "SKIP": "🔴", "UNREACHABLE": "⚠️"}
 
 
 class TelegramError(RuntimeError):
@@ -64,8 +65,15 @@ class Bot:
         return self.call("getUpdates", http_timeout=timeout + 10, offset=offset, timeout=timeout,
                          allowed_updates=["message"])
 
-    def send(self, chat_id: int, text: str) -> None:
-        self.call("sendMessage", chat_id=chat_id, text=text, parse_mode="HTML",
+    # send an HTML message; returns its message_id
+    def send(self, chat_id: int, text: str) -> int:
+        result = self.call("sendMessage", chat_id=chat_id, text=text, parse_mode="HTML",
+                           link_preview_options={"is_disabled": True})
+        return result["message_id"]
+
+    # replace the text of a message sent earlier
+    def edit(self, chat_id: int, message_id: int, text: str) -> None:
+        self.call("editMessageText", chat_id=chat_id, message_id=message_id, text=text, parse_mode="HTML",
                   link_preview_options={"is_disabled": True})
 
 
@@ -151,38 +159,49 @@ def format_job(job: Job) -> str:
     return "\n".join(lines)
 
 
-def build_messages(jobs: list[Job]) -> list[str]:
-    # Pack jobs into as few messages as fit Telegram's length limit.
-    messages: list[str] = []
-    current = f"🆕 <b>{len(jobs)} new offer{'s' if len(jobs) != 1 else ''} on Profesia.sk</b>"
-    for block in map(format_job, jobs):
-        if len(current) + 2 + len(block) > MAX_MESSAGE_LEN:
-            messages.append(current)
-            current = block
-        else:
-            current += "\n\n" + block
-    messages.append(current)
-    return messages
+# Offer message plus the agent's verdict: bold tag and a collapsible report
+def format_verdict(job: Job) -> str:
+    text = format_job(job)
+    if job.verdict is None:
+        return text
+
+    # verdict tag line
+    tag = job.verdict.tag
+    text += f"\n\n<b>{VERDICT_EMOJI.get(tag, '•')} {html.escape(tag)}</b>"
+
+    # report, cut on the raw text (so no HTML entity is split) until the message fits
+    room = MAX_MESSAGE_LEN - len(text) - len("\n<blockquote expandable></blockquote>")
+    content = job.verdict.content.strip()
+    if len(html.escape(content)) > room:
+        content = content[: room - 1]
+        while len(html.escape(content)) > room - 1:
+            content = content[:-100]
+        content += "…"
+    return f"{text}\n<blockquote expandable>{html.escape(content)}</blockquote>"
 
 
-def notify(bot: Bot, subs: Subscribers, jobs: list[Job]) -> bool:
-    # Send jobs to every subscriber. Drops chats that blocked the bot. Returns True if subs changed.
+# Send each offer as its own message to every subscriber.
+# Drops chats that blocked the bot. Returns (subs changed, {offer uuid: {chat_id: message_id}}).
+def notify(bot: Bot, subs: Subscribers, jobs: list[Job]) -> tuple[bool, dict[str, dict[int, int]]]:
+    sent: dict[str, dict[int, int]] = {}
     if not jobs or not subs.chats:
-        return False
-    messages = build_messages(jobs)
+        return False, sent
     changed = False
+
+    # one message per offer per chat
     for chat_id in list(subs.chats):
-        for text in messages:
+        for i, job in enumerate(jobs):
+            if i:
+                time.sleep(1)  # Telegram allows ~1 message/second per chat
             try:
-                bot.send(chat_id, text)
+                sent.setdefault(job.uuid, {})[chat_id] = bot.send(chat_id, format_job(job))
             except TelegramError as e:
-                if e.code == 403 or "chat not found" in str(e):  # blocked, kicked or chat gone
+                # blocked, kicked or chat gone: unsubscribe; other errors: skip this chat for now
+                if e.code == 403 or "chat not found" in str(e):
                     log.warning("removing subscriber %s: %s", chat_id, e)
                     del subs.chats[chat_id]
                     changed = True
                 else:
                     log.warning("send to %s failed: %s", chat_id, e)
                 break
-            if len(messages) > 1:
-                time.sleep(1)  # Telegram allows ~1 message/second per chat
-    return changed
+    return changed, sent

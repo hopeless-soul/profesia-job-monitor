@@ -1,0 +1,24 @@
+# Monitor + SQLite web viewer, sharing ./data (config.json, jobs.db, subscribers.json, backstory.md)
+services:
+  # scraper, Telegram bot and verdict agents
+  monitor:
+    build: .
+    volumes:
+      - ./data:/data
+    env_file:
+      - path: .env
+        required: false
+    restart: unless-stopped
+
+  # browse jobs.db at http://localhost:8080 (bound to localhost only; the viewer can edit the DB)
+  viewer:
+    image: coleifer/sqlite-web@sha256:1e5b86237968ed747554f951c6df2fc2fe4bf4ef070b8ca23d553d7f6c6426f7  # latest as of 2025-03-02
+    volumes:
+      - ./data:/data
+    environment:
+      SQLITE_DATABASE: jobs.db
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - monitor
+    restart: unless-stopped

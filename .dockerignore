@@ -1,0 +1,14 @@
+# keep local data, secrets and dev files out of the build context
+.git
+.venv
+.env
+.env.*
+data
+tests
+**/__pycache__
+*.db
+*.log
+config.json
+jobs.json
+subscribers.json
+backstory.md

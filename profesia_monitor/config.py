@@ -1,4 +1,4 @@
-# Load config.json. See config.example.json for the format.
+# Load data/config.json. See data/config.example.json for the format.
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from pathlib import Path
 from .scraper import Query
 
 _QUERY_KEYS = {"keyword", "segments", "remote_work", "min_salary", "salary_period", "count_days"}
-_TOP_KEYS = {"$schema", "out", "pages", "delay", "count_days", "searches", "telegram", "interval", "model"}
+_TOP_KEYS = {"$schema", "db", "backstory", "pages", "delay", "count_days", "searches", "telegram", "interval", "model"}
 _TELEGRAM_KEYS = {"token", "subscribers"}
-_MODEL_KEYS = {"provider", "name", "temperature", "max_tokens"}
+_MODEL_KEYS = {"provider", "name", "temperature", "max_tokens", "api_key"}
 
 
 class ConfigError(ValueError):
@@ -31,13 +31,15 @@ class ModelConfig:
     # Model name. Sensible default per provider is filled in when left blank.
     name: str | None = None
     temperature: float = 0.0
-    max_tokens: int = 1024
+    max_tokens: int = 8192  # thinking models spend part of this on reasoning
+    api_key: str | None = None  # falls back to the provider's env var
 
 
 @dataclass
 class Config:
     searches: list[Query] = field(default_factory=list)
-    out: Path = Path("jobs.json")
+    db: Path = Path("jobs.db")  # SQLite offer store
+    backstory: Path = Path("backstory.md")  # candidate profile for the offer reviewer
     pages: int = 3
     delay: float = 1.5
     interval: float = 60  # minutes between scrapes
@@ -113,10 +115,14 @@ def _model(raw: object) -> ModelConfig:
     temperature = raw.get("temperature", 0.0)
     if not isinstance(temperature, (int, float)) or isinstance(temperature, bool) or not (0 <= temperature <= 2):
         raise ConfigError("model.temperature: expected a number between 0 and 2")
-    max_tokens = raw.get("max_tokens", 1024)
+    max_tokens = raw.get("max_tokens", 8192)
     if not isinstance(max_tokens, int) or max_tokens < 1:
         raise ConfigError("model.max_tokens: expected a positive integer")
-    return ModelConfig(provider, name, float(temperature), max_tokens)
+    # optional API key, empty string means "use the env var"
+    api_key = raw.get("api_key")
+    if api_key is not None and not isinstance(api_key, str):
+        raise ConfigError("model.api_key: expected a string or null")
+    return ModelConfig(provider, name, float(temperature), max_tokens, api_key or None)
 
 
 def parse_config(data: object) -> Config:
@@ -137,14 +143,19 @@ def parse_config(data: object) -> Config:
     interval = data.get("interval", 60)
     if not isinstance(interval, (int, float)) or isinstance(interval, bool) or interval <= 0:
         raise ConfigError("interval: expected a positive number of minutes")
-    out = data.get("out", "jobs.json")
-    if not isinstance(out, str) or not out:
-        raise ConfigError("out: expected a file path")
+    # database and backstory file paths
+    db = data.get("db", "jobs.db")
+    if not isinstance(db, str) or not db:
+        raise ConfigError("db: expected a file path")
+    backstory = data.get("backstory", "backstory.md")
+    if not isinstance(backstory, str) or not backstory:
+        raise ConfigError("backstory: expected a file path")
     days = _count_days(data.get("count_days"), "count_days")
 
     return Config(
         searches=[_query(s, f"searches[{i}]", days) for i, s in enumerate(searches)],
-        out=Path(out),
+        db=Path(db),
+        backstory=Path(backstory),
         pages=pages,
         delay=float(delay),
         interval=float(interval),
@@ -160,8 +171,10 @@ def load_config(path: Path) -> Config:
     except json.JSONDecodeError as e:
         raise ConfigError(f"{path}: invalid JSON ({e})") from None
     config = parse_config(data)
-    if not config.out.is_absolute():
-        config.out = path.parent / config.out
+    if not config.db.is_absolute():
+        config.db = path.parent / config.db
+    if not config.backstory.is_absolute():
+        config.backstory = path.parent / config.backstory
     if not config.telegram.subscribers.is_absolute():
         config.telegram.subscribers = path.parent / config.telegram.subscribers
     return config

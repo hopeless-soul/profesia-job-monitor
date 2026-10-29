@@ -37,9 +37,6 @@ data/*
 # Personal candidate profile read by the offer reviewer
 backstory.md
 
-# Local machine helpers
-run-monitor.bat
-
 # Editors and IDEs
 .idea/
 .vscode/

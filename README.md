@@ -143,6 +143,12 @@ Running: scraping every 60 min, 1 Telegram subscriber(s), verdicts on. Ctrl+C to
 
 It scrapes now and then every `interval` minutes. Send `/start` to your bot in Telegram to subscribe. Ctrl+C stops it.
 
+On Windows you can double-click **`run-monitor.bat`** instead. It runs the same thing **locally** with the `.venv` Python (`python -m profesia_monitor -v`); it does **not** start Docker. Before starting, it checks that:
+
+- `.venv` exists (otherwise it prints the install commands)
+- `data\config.json` exists (otherwise it tells you to copy `data\config.example.json`)
+- the Docker `monitor` container isn't running (otherwise it asks you to run `docker compose stop monitor`, since both would send every offer twice)
+
 To run in the background on Windows:
 
 ```powershell
@@ -167,6 +173,8 @@ docker compose run --rm --no-deps monitor python -m profesia_monitor -c /data/co
 ```bash
 docker compose up -d --build
 ```
+
+This is the only way to start the Docker version; `run-monitor.bat` always runs locally.
 
 | Service | What it does |
 |---|---|
@@ -317,6 +325,7 @@ profesia_monitor/
 schemas/                  JSON Schema for config.json
 tests/                    pytest suite and HTML fixtures
 Dockerfile, docker-compose.yml, .env.example
+run-monitor.bat           Windows launcher for a local run
 ```
 
 Design notes:

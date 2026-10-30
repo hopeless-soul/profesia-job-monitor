@@ -1,8 +1,8 @@
 # Profesia Job Monitor
 
-A CLI daemon that watches [Profesia.sk](https://www.profesia.sk) for new job offers matching your searches. It stores every offer in a deduplicated SQLite database, sends each new offer to Telegram subscribers, and has an LLM agent judge the offer against your backstory: 🟢 GO, 🟡 STRETCH or 🔴 SKIP.
+A CLI daemon that watches [Profesia.sk](https://www.profesia.sk), and optionally LinkedIn, for new job offers matching your searches. It stores every offer in a deduplicated SQLite database, sends each new offer to Telegram subscribers, and has an LLM agent judge the offer against your backstory: 🟢 GO, 🟡 STRETCH or 🔴 SKIP.
 
-It needs no browser. Profesia listing pages are server-rendered HTML, so scraping runs on `requests` + BeautifulSoup.
+Profesia needs no browser: its listing pages are server-rendered HTML, so scraping runs on `requests` + BeautifulSoup. The optional [LinkedIn source](#linkedin-source) runs through the LinkedIn MCP server, which drives a browser logged in as you.
 
 - [Getting started](#getting-started): local run and Docker
 - [Configuration](#configuration)
@@ -15,9 +15,11 @@ It needs no browser. Profesia listing pages are server-rendered HTML, so scrapin
 - **Multi-search monitoring**: several keyword + filter combinations, all stored in one database
 - **Rich filtering**: region, remote mode, minimum salary, recency, position type, language
 - **Structured salary parsing**: min/max, currency and period from Slovak labels such as `Od 3 900 EUR/mesiac`
+- **LinkedIn source (optional)**: recent LinkedIn jobs go through the same store, Telegram messages and verdicts
+- **Cross-source duplicates**: a new offer with the same title + company as a stored one (any source) is stored but not sent or reviewed again
 - **Telegram notifications**: one message per new offer; users subscribe with `/start` and leave with `/stop`
 - **AI verdicts**: an `orchestrator` agent hands each new offer to an `offer_reviewer` subagent, which reads the posting and rates it against your backstory. The verdict is saved and added to the offer's Telegram message as an expandable report.
-- **SQLite store**: offers keyed by UUID4, unique by Profesia offer ID, with `first_seen` / `last_seen` tracking
+- **SQLite store**: offers keyed by UUID4, unique by `(source, id)`, with `first_seen` / `last_seen` tracking
 - **Docker**: the monitor plus a sqlite-web viewer for browsing the database
 - **Offline tests**: HTML fixtures and a scripted fake LLM; no network or API key needed
 
@@ -29,6 +31,7 @@ It needs no browser. Profesia listing pages are server-rendered HTML, so scrapin
 | Scraping | `requests` ≥ 2.31, `beautifulsoup4` ≥ 4.12 |
 | Storage | SQLite (Python's built-in `sqlite3`) |
 | AI agents | `langchain` ≥ 1.0 (`create_agent`, LangGraph under the hood), `langchain-google-genai` ≥ 4.0 by default; `langchain-anthropic` or `langchain-openai` optional |
+| LinkedIn (optional) | `mcp` ≥ 1.0 client for [`mcp-server-linkedin`](https://github.com/stickerdaniel/linkedin-mcp-server), started with `uvx` |
 | Notifications | Telegram Bot API, long polling (no webhook or public server) |
 | Containers | Docker + Docker Compose, [sqlite-web](https://github.com/coleifer/sqlite-web) viewer |
 | Tests | `pytest` ≥ 8, `jsonschema` ≥ 4.20 |
@@ -213,7 +216,12 @@ docker compose run --rm --no-deps monitor python -m profesia_monitor -c /data/co
     { "keyword": "python", "segments": ["informacne-technologie", "plny-uvazok"] }
   ],
   "telegram": { "token": null, "subscribers": "subscribers.json" },
-  "model": { "provider": "google", "name": "gemini-2.5-flash", "temperature": 0.0, "max_tokens": 8192, "api_key": null }
+  "model": { "provider": "google", "name": "gemini-2.5-flash", "temperature": 0.0, "max_tokens": 8192, "api_key": null },
+  "linkedin": {
+    "date_posted": "past_24_hours",
+    "max_pages": 1,
+    "searches": [{ "keywords": "python developer in Slovakia", "work_type": "remote,hybrid" }]
+  }
 }
 ```
 
@@ -233,6 +241,7 @@ docker compose run --rm --no-deps monitor python -m profesia_monitor -c /data/co
 | `model.temperature` | `0.0` | 0 gives the most consistent verdicts |
 | `model.max_tokens` | `8192` | Keep it high: thinking models spend part of it on reasoning, and around 1024 the verdict gets cut off |
 | `model.api_key` | `null` | `null` falls back to `GOOGLE_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
+| `linkedin` | `null` | LinkedIn source; leave it out to turn LinkedIn off (see [LinkedIn source](#linkedin-source)) |
 
 ### Search filters
 
@@ -255,11 +264,37 @@ Common segments:
 | Work area | `informacne-technologie`, `elektrotechnika-a-energetika` |
 | Language | `anglicky-jazyk`, `nemecky-jazyk` |
 
+### LinkedIn source
+
+With a `linkedin` section, every run also searches LinkedIn through the [LinkedIn MCP server](https://github.com/stickerdaniel/linkedin-mcp-server). For each search it collects job IDs, skips the ones already stored, opens the rest and reads company, title, location, posted time and work type from the job page. The jobs then go through the same store, Telegram messages and verdicts as Profesia offers.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `linkedin.searches[].keywords` | required | Search text. Put the location in it (`"python developer in Slovakia"`): LinkedIn ignores a separate location filter |
+| `linkedin.searches[].work_type` | `null` | Comma-separated `on_site`, `remote`, `hybrid` |
+| `linkedin.searches[].experience_level` | `null` | Comma-separated `internship`, `entry`, `associate`, `mid_senior`, `director`, `executive` |
+| `linkedin.searches[].job_type` | `null` | Comma-separated `full_time`, `part_time`, `contract`, `temporary`, `volunteer`, `internship`, `other` |
+| `linkedin.date_posted` | `past_24_hours` | `past_hour`, `past_24_hours`, `past_week` or `past_month` |
+| `linkedin.max_pages` | `1` | Result pages per search, 1 to 10 |
+
+Setup:
+
+1. Install [uv](https://docs.astral.sh/uv/). The monitor starts the server with `uvx mcp-server-linkedin@latest`.
+2. Do the first run from a console: `python -m profesia_monitor --once`. The server downloads its Chromium in the background (LinkedIn is skipped with a warning until it's ready), then opens a login window. Sign in there, including any captcha or two-factor check. The session is saved for later runs.
+3. When the session expires, LinkedIn is skipped with a `linkedin skipped: …` warning and a login window opens again.
+
+Limits:
+
+- **Local runs only.** Login needs a visible browser window; in Docker the LinkedIn step fails each run and is skipped with a warning. Profesia keeps working.
+- **Your account.** The server uses your own LinkedIn session. Keep `interval` and `max_pages` modest: frequent automated searches can get the account restricted.
+- **No salary.** LinkedIn offers are stored with `salary` empty.
+- The whole LinkedIn step is limited to 5 minutes per run; jobs read before the limit are kept. A job whose page fails is retried next run.
+
 ### CLI options
 
 | Option | Meaning |
 |---|---|
-| `KEYWORD` | One-off search that ignores the config's searches, e.g. `python -m profesia_monitor "c#" --remote 2 --once` |
+| `KEYWORD` | One-off Profesia search that ignores the config's searches (and LinkedIn), e.g. `python -m profesia_monitor "c#" --remote 2 --once` |
 | `--segment SLUG`, `--remote N`, `--min-salary N`, `--salary-period m\|h` | Filters for a one-off `KEYWORD` search |
 | `--once` | Scrape once, wait for verdicts, exit |
 | `--interval MINUTES` | Minutes between scrapes |
@@ -278,6 +313,7 @@ Common segments:
 ```mermaid
 flowchart LR
     P[Profesia.sk listings] -->|scrape + parse| S[(data/jobs.db)]
+    L[LinkedIn MCP server] -->|search + job pages| S
     S -->|new offers| T[Telegram<br/>one message per offer]
     S -->|new offers, background thread| O[orchestrator]
     O -->|tool call| R[offer_reviewer]
@@ -287,8 +323,8 @@ flowchart LR
     O -->|callback: edit message| T
 ```
 
-1. **Scrape.** Every `interval` minutes, each search's listing pages are fetched and parsed.
-2. **Store.** Offers are upserted by Profesia ID. Known offers get refreshed fields and `last_seen`; new ones get a UUID.
+1. **Scrape.** Every `interval` minutes, each search's listing pages are fetched and parsed. With `linkedin` set, LinkedIn searches run next; only job pages not stored yet are opened.
+2. **Store.** Offers are upserted by `(source, id)`. Known offers get refreshed fields and `last_seen`; new ones get a UUID. A new offer whose title + company (case and spacing ignored) matches a stored offer from any source, or an earlier one in the same scrape, is stored but skips steps 3 and 4.
 3. **Notify.** Each new offer goes to every subscriber as its own message, about one per second per chat. The message IDs are saved.
 4. **Review.** In a background thread, the `orchestrator` agent receives the offer URL and calls the `offer_reviewer` subagent. The reviewer fetches the posting, rates every must-have against your backstory (✅ / 🟡 / ❌), and returns `{tag, content, url}`.
 5. **Callback.** The verdict is saved, each subscriber's message is edited to add the tag and an expandable report, and `verdict <tag> for offer <id> (uuid …)` is logged.
@@ -299,7 +335,7 @@ A review costs about 4 LLM calls. Scraping and `/start` replies never wait on it
 
 | Table | Contents |
 |---|---|
-| `offers` | `uuid` (primary key), Profesia `id` (unique), scraped fields, `salary` / `labels` as JSON, `first_seen`, `last_seen`, `verdict_tag`, `verdict_content` (full report), `verdict_url` |
+| `offers` | `uuid` (primary key), `source` (`profesia` / `linkedin`) + `id` (unique together), scraped fields, `salary` / `labels` as JSON, `first_seen`, `last_seen`, `verdict_tag`, `verdict_content` (full report), `verdict_url` |
 | `offer_messages` | The Telegram message each chat got for an offer: `offer_uuid`, `chat_id`, `message_id` |
 
 ### Agents
@@ -317,6 +353,7 @@ profesia_monitor/
 ├── scraper.py            HTTP fetching, Query builder, pagination
 ├── parser.py             HTML parsing (no network)
 ├── models.py             Dataclasses: Job, Salary, Verdict
+├── linkedin.py           LinkedIn source via the LinkedIn MCP server
 ├── store.py              SQLite store and legacy jobs.json import
 ├── telegram.py           Bot API client, subscribers, message formatting
 └── agents/
@@ -334,7 +371,8 @@ run-monitor.bat           Windows launcher for a local run
 Design notes:
 
 - **No browser engine.** Listing pages are server-rendered, so `requests` is enough.
-- **Offer ID as the dedup key.** The original fork deduplicated by `(title, company)`, which merged reposts and missed renames. The numeric ID in `/O<id>` URLs is stable.
+- **`(source, id)` as the key.** The offer ID on its site is stable, so it decides whether an offer is already stored. Title + company only decides whether a new offer is worth a message and a verdict, so the same role posted for several cities or on both sites notifies once.
+- **Automatic migration.** A database created before the LinkedIn source is rebuilt once on first open: rows keep their UUIDs and verdicts and get `source = 'profesia'`.
 - **Per-chat message table.** Every subscriber gets a different `message_id`, so verdict edits look up each chat's own message.
 - **Safe writes.** Each scrape is one SQLite transaction. `subscribers.json` is written via `tempfile` → `os.replace`, so a crash never truncates it.
 
@@ -346,7 +384,10 @@ Design notes:
 | `config: unknown keys ['out']` | Your config predates SQLite: rename `"out": "jobs.json"` to `"db": "jobs.db"` |
 | `verdicts disabled: …` | The message names the cause: the provider package isn't installed, the API key is missing, or `backstory.md` isn't at the `backstory` path |
 | `verdict failed for offer …` with a JSON / structured output error | The answer was cut off; raise `model.max_tokens` (8192 works for Gemini 2.5+) |
-| Verdict tag `UNREACHABLE` | The reviewer couldn't read the offer page (expired, login wall, JS-only) |
+| Verdict tag `UNREACHABLE` | The reviewer couldn't read the offer page (expired, login wall, JS-only, or still rate-limited after 3 retries) |
+| `fetch …: HTTP 429, retrying in N s` | The site is rate-limiting page downloads; the fetch waits and retries up to 3 times |
+| `linkedin skipped: … login …` | Sign in to the LinkedIn window that opened (console run), then the next run picks LinkedIn up |
+| `linkedin skipped: …` with `uvx` not found | Install [uv](https://docs.astral.sh/uv/) |
 | `Telegram rejected the bot token` | Wrong `telegram.token` / `TELEGRAM_BOT_TOKEN` |
 | Every old offer arrived in Telegram as new | `--import-json` wasn't run before the first run |
 | Offers arrive twice | The local monitor and the Docker `monitor` are both running |

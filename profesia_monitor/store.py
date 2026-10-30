@@ -1,4 +1,4 @@
-# Job store: SQLite database, offers unique by Profesia ID.
+# Job store: SQLite database, offers unique by (source, id).
 # The legacy jobs.json file (schema_version 1) is only read, for --import-json.
 # Callers own transactions: wrap writes in `with conn:` to commit.
 
@@ -14,11 +14,12 @@ from .models import Job, Verdict
 
 SCHEMA_VERSION = 1
 
-# Tables: one row per offer, plus the Telegram message each chat got for it
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS offers (
+# Offers table; {name} lets the migration build it under a temporary name
+_OFFERS_TABLE = """
+CREATE TABLE IF NOT EXISTS {name} (
     uuid            TEXT PRIMARY KEY,
-    id              INTEGER NOT NULL UNIQUE,  -- Profesia offer ID
+    source          TEXT NOT NULL DEFAULT 'profesia',
+    id              INTEGER NOT NULL,         -- offer ID on its source site
     title           TEXT NOT NULL,
     url             TEXT NOT NULL,
     company         TEXT,
@@ -31,8 +32,13 @@ CREATE TABLE IF NOT EXISTS offers (
     last_seen       TEXT,
     verdict_tag     TEXT,
     verdict_content TEXT,
-    verdict_url     TEXT
+    verdict_url     TEXT,
+    UNIQUE (source, id)
 );
+"""
+
+# Tables: one row per offer, plus the Telegram message each chat got for it
+_SCHEMA = _OFFERS_TABLE.format(name="offers") + """
 CREATE TABLE IF NOT EXISTS offer_messages (
     offer_uuid TEXT NOT NULL REFERENCES offers(uuid),
     chat_id    INTEGER NOT NULL,
@@ -43,7 +49,7 @@ CREATE TABLE IF NOT EXISTS offer_messages (
 
 # Columns written on insert (verdict columns are filled later by save_verdict)
 _INSERT_COLUMNS = (
-    "uuid", "id", "title", "url", "company", "company_id", "location",
+    "uuid", "source", "id", "title", "url", "company", "company_id", "location",
     "salary", "labels", "posted_text", "first_seen", "last_seen",
 )
 
@@ -75,7 +81,25 @@ def connect(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA)
+    _migrate(conn)
     return conn
+
+
+# Databases made before the LinkedIn source have UNIQUE(id) and no source column:
+# rebuild the table once (SQLite can't change a constraint in place), marking old rows as Profesia
+def _migrate(conn: sqlite3.Connection) -> None:
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(offers)")]
+    if "source" in columns:
+        return
+    names = ", ".join(columns)
+    conn.executescript(
+        "BEGIN;"
+        + _OFFERS_TABLE.format(name="offers_new")
+        + f"INSERT INTO offers_new ({names}, source) SELECT {names}, 'profesia' FROM offers;"
+        "DROP TABLE offers;"
+        "ALTER TABLE offers_new RENAME TO offers;"
+        "COMMIT;"
+    )
 
 
 # Job -> column values, with salary and labels encoded as JSON
@@ -87,13 +111,20 @@ def _row(job: Job) -> dict:
     return row
 
 
-# Insert offers whose ID is not stored yet; returns how many were inserted
+# Duplicate key: normalized title + company; None (never a duplicate) without a company
+def _dup_key(title: str, company: str | None) -> tuple[str, str] | None:
+    if not company:
+        return None
+    return " ".join(title.split()).casefold(), " ".join(company.split()).casefold()
+
+
+# Insert offers whose (source, id) is not stored yet; returns how many were inserted
 def insert_jobs(conn: sqlite3.Connection, jobs: list[Job]) -> int:
     # give every offer a database key
     for job in jobs:
         job.uuid = job.uuid or str(uuid.uuid4())
 
-    # insert, skipping IDs already present
+    # insert, skipping offers already present
     before = conn.total_changes
     conn.executemany(
         f"INSERT OR IGNORE INTO offers ({', '.join(_INSERT_COLUMNS)}) "
@@ -103,32 +134,51 @@ def insert_jobs(conn: sqlite3.Connection, jobs: list[Job]) -> int:
     return conn.total_changes - before
 
 
-# Store a scrape: refresh known offers, insert new ones; returns the new offers
+# Store a scrape: refresh known offers, insert new ones; returns the new offers to notify and review.
+# A new offer with the same title + company as a stored one (any source) or an earlier one in this
+# scrape is stored too, so it isn't fetched again, but is not returned.
 def upsert_jobs(conn: sqlite3.Connection, scraped: list[Job], seen_at: str | None = None) -> list[Job]:
     seen_at = seen_at or now_iso()
 
     # drop duplicates (the same offer can match several searches)
-    by_id = {job.id: job for job in scraped}
+    by_key = {(job.source, job.id): job for job in scraped}
 
-    # find which offers are already stored
-    ids = list(by_id)
-    known = {
-        row[0]
-        for row in conn.execute(f"SELECT id FROM offers WHERE id IN ({', '.join('?' * len(ids))})", ids)
-    }
+    # find which offers are already stored, per source
+    known: set[tuple[str, int]] = set()
+    for source in {s for s, _ in by_key}:
+        ids = [i for s, i in by_key if s == source]
+        known |= {(source, i) for i in known_ids(conn, source, ids)}
 
     # refresh known offers, keeping uuid, first_seen and verdict
     conn.executemany(
-        f"UPDATE offers SET {', '.join(f'{c} = :{c}' for c in _REFRESH_COLUMNS)} WHERE id = :id",
-        [_row(job) | {"last_seen": seen_at} for job in by_id.values() if job.id in known],
+        f"UPDATE offers SET {', '.join(f'{c} = :{c}' for c in _REFRESH_COLUMNS)} "
+        "WHERE source = :source AND id = :id",
+        [_row(job) | {"last_seen": seen_at} for key, job in by_key.items() if key in known],
     )
 
-    # insert new offers
-    added = [job for job in by_id.values() if job.id not in known]
+    # new offers; skip the ones whose title + company is already stored or taken earlier in this scrape
+    added = [job for key, job in by_key.items() if key not in known]
+    taken = {_dup_key(title, company) for title, company in conn.execute("SELECT title, company FROM offers")}
+    fresh = []
     for job in added:
         job.first_seen = job.last_seen = seen_at
+        key = _dup_key(job.title, job.company)
+        if key is None or key not in taken:
+            fresh.append(job)
+            taken.add(key)
+
     insert_jobs(conn, added)
-    return added
+    return fresh
+
+
+# IDs of `source` that are already stored
+def known_ids(conn: sqlite3.Connection, source: str, ids: list[int]) -> set[int]:
+    if not ids:
+        return set()
+    rows = conn.execute(
+        f"SELECT id FROM offers WHERE source = ? AND id IN ({', '.join('?' * len(ids))})", [source, *ids]
+    )
+    return {row[0] for row in rows}
 
 
 # Number of stored offers
@@ -152,9 +202,9 @@ def save_verdict(conn: sqlite3.Connection, offer_uuid: str, verdict: Verdict) ->
     )
 
 
-# Load one offer by Profesia ID
-def get_job(conn: sqlite3.Connection, id: int) -> Job | None:
-    row = conn.execute("SELECT * FROM offers WHERE id = ?", (id,)).fetchone()
+# Load one offer by its source and ID
+def get_job(conn: sqlite3.Connection, id: int, source: str = "profesia") -> Job | None:
+    row = conn.execute("SELECT * FROM offers WHERE source = ? AND id = ?", (source, id)).fetchone()
     if row is None:
         return None
 

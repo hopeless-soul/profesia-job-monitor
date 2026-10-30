@@ -5,7 +5,7 @@ import jsonschema
 import pytest
 
 from profesia_monitor.__main__ import build_parser, resolve_config
-from profesia_monitor.config import ConfigError, load_config, parse_config
+from profesia_monitor.config import ConfigError, LinkedInConfig, LinkedInSearch, load_config, parse_config
 from profesia_monitor.scraper import Query
 
 ROOT = Path(__file__).parents[1]
@@ -21,6 +21,7 @@ def test_example_config_is_valid():
     assert config.backstory == ROOT / "data" / "backstory.md"
     assert config.model.api_key is None
     assert config.searches[0] == Query("c#", ["bratislavsky-kraj"], 2, 2000, "m", 7)
+    assert config.linkedin.searches[0] == LinkedInSearch("python developer in Slovakia", work_type="remote,hybrid")
 
 
 # top-level count_days is the default, a search's own value wins
@@ -38,12 +39,13 @@ def test_invalid_config_names_the_field():
 # CLI flags win over the config file
 def test_cli_flags_override_config(tmp_path):
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"pages": 2, "searches": [{"keyword": "python"}]}), encoding="utf-8")
+    path.write_text(json.dumps({"pages": 2, "searches": [{"keyword": "python"}], "linkedin": {"searches": [{"keywords": "x"}]}}), encoding="utf-8")
     parser = build_parser()
 
     config = resolve_config(parser.parse_args(["c#", "--config", str(path), "--pages", "5", "--days", "1", "--interval", "15"]), parser)
 
     assert config.searches == [Query("c#", count_days=1)]
+    assert config.linkedin is None
     assert config.pages == 5
     assert config.interval == 15
     assert config.db == tmp_path / "jobs.db"
@@ -56,3 +58,23 @@ def test_model_api_key():
     assert parse_config({"searches": searches, "model": {"api_key": ""}}).model.api_key is None
     with pytest.raises(ConfigError, match="model.api_key"):
         parse_config({"searches": searches, "model": {"api_key": 1}})
+
+
+# linkedin is off without its section; defaults fill in; bad values name the field
+def test_linkedin_section():
+    searches = [{"keyword": "a"}]
+    assert parse_config({"searches": searches}).linkedin is None
+    assert parse_config({"searches": searches, "linkedin": {"searches": [{"keywords": "dev"}]}}).linkedin == LinkedInConfig(
+        [LinkedInSearch("dev")], "past_24_hours", 1
+    )
+    bad = [
+        ({"searches": []}, "linkedin.searches"),
+        ({"searches": [{"keywords": ""}]}, r"linkedin.searches\[0\].keywords"),
+        ({"searches": [{"keywords": "a", "work_type": "remote,office"}]}, r"linkedin.searches\[0\].work_type"),
+        ({"searches": [{"keywords": "a"}], "date_posted": "today"}, "linkedin.date_posted"),
+        ({"searches": [{"keywords": "a"}], "max_pages": 11}, "linkedin.max_pages"),
+        ({"searches": [{"keywords": "a"}], "location": "SK"}, "linkedin: unknown keys"),
+    ]
+    for linkedin, field in bad:
+        with pytest.raises(ConfigError, match=field):
+            parse_config({"searches": searches, "linkedin": linkedin})

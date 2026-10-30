@@ -9,9 +9,19 @@ from pathlib import Path
 from .scraper import Query
 
 _QUERY_KEYS = {"keyword", "segments", "remote_work", "min_salary", "salary_period", "count_days"}
-_TOP_KEYS = {"$schema", "db", "backstory", "pages", "delay", "count_days", "searches", "telegram", "interval", "model"}
+_TOP_KEYS = {"$schema", "db", "backstory", "pages", "delay", "count_days", "searches", "telegram", "interval", "model", "linkedin"}
 _TELEGRAM_KEYS = {"token", "subscribers"}
 _MODEL_KEYS = {"provider", "name", "temperature", "max_tokens", "api_key"}
+_LINKEDIN_KEYS = {"searches", "date_posted", "max_pages"}
+_LINKEDIN_SEARCH_KEYS = {"keywords", "work_type", "experience_level", "job_type"}
+
+# Values the LinkedIn MCP server's search_jobs accepts
+_DATE_POSTED = {"past_hour", "past_24_hours", "past_week", "past_month"}
+_LINKEDIN_FILTERS = {
+    "work_type": {"on_site", "remote", "hybrid"},
+    "experience_level": {"internship", "entry", "associate", "mid_senior", "director", "executive"},
+    "job_type": {"full_time", "part_time", "contract", "temporary", "volunteer", "internship", "other"},
+}
 
 
 class ConfigError(ValueError):
@@ -35,6 +45,23 @@ class ModelConfig:
     api_key: str | None = None  # falls back to the provider's env var
 
 
+# One LinkedIn search. Filters are comma-separated MCP values, e.g. work_type "remote,hybrid".
+# Put the location in the keywords ("python developer in Slovakia"): LinkedIn ignores a separate location.
+@dataclass
+class LinkedInSearch:
+    keywords: str
+    work_type: str | None = None
+    experience_level: str | None = None
+    job_type: str | None = None
+
+
+@dataclass
+class LinkedInConfig:
+    searches: list[LinkedInSearch]
+    date_posted: str = "past_24_hours"
+    max_pages: int = 1  # result pages per search (1-10)
+
+
 @dataclass
 class Config:
     searches: list[Query] = field(default_factory=list)
@@ -45,6 +72,7 @@ class Config:
     interval: float = 60  # minutes between scrapes
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
+    linkedin: LinkedInConfig | None = None  # None = LinkedIn source off
 
 
 def _count_days(value: object, where: str) -> int | None:
@@ -125,6 +153,48 @@ def _model(raw: object) -> ModelConfig:
     return ModelConfig(provider, name, float(temperature), max_tokens, api_key or None)
 
 
+def _linkedin_search(raw: object, where: str) -> LinkedInSearch:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{where}: expected an object")
+    if unknown := raw.keys() - _LINKEDIN_SEARCH_KEYS:
+        raise ConfigError(f"{where}: unknown keys {sorted(unknown)}")
+    keywords = raw.get("keywords")
+    if not isinstance(keywords, str) or not keywords.strip():
+        raise ConfigError(f"{where}.keywords: required non-empty string")
+
+    # each filter is a comma-separated list of allowed values
+    filters = {}
+    for key, allowed in _LINKEDIN_FILTERS.items():
+        value = raw.get(key)
+        if value is not None and (
+            not isinstance(value, str) or not {v.strip() for v in value.split(",")} <= allowed
+        ):
+            raise ConfigError(f"{where}.{key}: expected comma-separated values from {sorted(allowed)}")
+        filters[key] = value
+    return LinkedInSearch(keywords, **filters)
+
+
+def _linkedin(raw: object) -> LinkedInConfig | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError("linkedin: expected an object")
+    if unknown := raw.keys() - _LINKEDIN_KEYS:
+        raise ConfigError(f"linkedin: unknown keys {sorted(unknown)}")
+    searches = raw.get("searches")
+    if not isinstance(searches, list) or not searches:
+        raise ConfigError("linkedin.searches: expected a non-empty list")
+    date_posted = raw.get("date_posted", "past_24_hours")
+    if date_posted not in _DATE_POSTED:
+        raise ConfigError(f"linkedin.date_posted: expected one of {sorted(_DATE_POSTED)}")
+    max_pages = raw.get("max_pages", 1)
+    if not isinstance(max_pages, int) or isinstance(max_pages, bool) or not 1 <= max_pages <= 10:
+        raise ConfigError("linkedin.max_pages: expected an integer from 1 to 10")
+    return LinkedInConfig(
+        [_linkedin_search(s, f"linkedin.searches[{i}]") for i, s in enumerate(searches)], date_posted, max_pages
+    )
+
+
 def parse_config(data: object) -> Config:
     if not isinstance(data, dict):
         raise ConfigError("config: expected an object")
@@ -161,6 +231,7 @@ def parse_config(data: object) -> Config:
         interval=float(interval),
         telegram=_telegram(data.get("telegram")),
         model=_model(data.get("model")),
+        linkedin=_linkedin(data.get("linkedin")),
     )
 
 

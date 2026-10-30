@@ -139,3 +139,11 @@ def test_notify_drops_chats_that_blocked_the_bot(tmp_path):
     assert ids == {"u1": {1: 1}}
     assert list(subs.chats) == [1]
     assert [chat for chat, _ in bot.sent] == [1]
+
+
+# the details line names the offer's source
+def test_format_shows_source():
+    offer = job(1)
+    assert "ACME &lt;s.r.o.&gt; · Profesia" in format_verdict(offer)
+    offer.source = "linkedin"
+    assert "· LinkedIn" in format_verdict(offer)

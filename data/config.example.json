@@ -22,6 +22,14 @@
       "salary_period": "m"
     }
   ],
+  "linkedin": {
+    "date_posted": "past_24_hours",
+    "max_pages": 1,
+    "searches": [
+      { "keywords": "python developer in Slovakia", "work_type": "remote,hybrid" },
+      { "keywords": "c# developer in Bratislava" }
+    ]
+  },
   "telegram": {
     "token": null,
     "subscribers": "subscribers.json"

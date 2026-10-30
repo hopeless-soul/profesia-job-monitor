@@ -36,10 +36,10 @@ class Verdict:
         return cls(d["tag"], d["content"], d["url"])
 
 
-# One Profesia.sk offer
+# One job offer from Profesia.sk or LinkedIn
 @dataclass
 class Job:
-    id: int  # Profesia offer ID, unique key for dedup
+    id: int  # offer ID on its source site; (source, id) is the unique key
     title: str
     url: str
     company: str | None = None
@@ -52,6 +52,7 @@ class Job:
     last_seen: str | None = None
     uuid: str | None = None  # database primary key, set on insert
     verdict: Verdict | None = None
+    source: str = "profesia"  # "profesia" or "linkedin"
 
     # serialize to a plain dict
     def to_dict(self) -> dict:

@@ -2,3 +2,4 @@ requests>=2.31
 beautifulsoup4>=4.12
 langchain>=1.0
 langchain-google-genai>=4.0
+mcp>=1.0

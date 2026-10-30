@@ -11,6 +11,7 @@ Offers are stored in SQLite (config `db`). With a Telegram token (config
 telegram.token or TELEGRAM_BOT_TOKEN), each new offer is sent to everyone who
 sent /start to the bot. With an LLM configured (config `model`), every new
 offer then gets a verdict that is saved and added to its Telegram message.
+With a `linkedin` section in the config, LinkedIn searches run alongside (local runs only).
 """
 
 from __future__ import annotations
@@ -27,10 +28,20 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 
+from . import linkedin
 from .config import Config, ConfigError, load_config
 from .models import Job, Verdict
 from .scraper import Query, scrape
-from .store import connect, count_jobs, insert_jobs, load_jobs, save_message_ids, save_verdict, upsert_jobs
+from .store import (
+    connect,
+    count_jobs,
+    insert_jobs,
+    known_ids,
+    load_jobs,
+    save_message_ids,
+    save_verdict,
+    upsert_jobs,
+)
 from .telegram import Bot, Subscribers, TelegramError, format_verdict, handle_updates, notify
 
 # Runtime files (config, jobs.db, subscribers, backstory) live in data/, shared with Docker's /data volume
@@ -156,6 +167,7 @@ def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         except ValueError as e:
             parser.error(str(e))
         config.searches = [query]
+        config.linkedin = None  # one-off searches are Profesia-only
 
     # apply days filter to all searches
     if args.days is not None:
@@ -195,17 +207,26 @@ def run_once(
         print(f"{' '.join([repr(query.keyword), *query.segments])}: {len(jobs)} offers")
         scraped.extend(jobs)
 
-    # store offers; new ones get a uuid and no verdict yet
+    # LinkedIn searches; details are fetched only for jobs not stored yet
+    if config.linkedin:
+        with closing(connect(config.db)) as conn:
+            jobs = linkedin.fetch_jobs(config.linkedin, partial(known_ids, conn, "linkedin"))
+        print(f"linkedin: {len(jobs)} offers")
+        scraped.extend(jobs)
+
+    # store offers; new ones get a uuid and no verdict yet, duplicates are stored but not returned
     with closing(connect(config.db)) as conn, conn:
+        before = count_jobs(conn)
         added = upsert_jobs(conn, scraped)
         total = count_jobs(conn)
+    dups = total - before - len(added)
 
     # print new offers and totals
     for job in added:
         salary = job.salary.raw if job.salary else "-"
-        print(f"NEW {job.id}  {job.title} | {job.company} | {salary}")
+        print(f"NEW {job.source} {job.id}  {job.title} | {job.company} | {salary}")
     print(
-        f"Scraped {len(scraped)}, new {len(added)}, total {total} in {config.db}"
+        f"Scraped {len(scraped)}, new {len(added)}, dup {dups}, total {total} in {config.db}"
     )
 
     # notify subscribers and remember which message each chat got
@@ -333,7 +354,8 @@ def main(argv: list[str] | None = None) -> int:
         f", {len(subs.chats)} Telegram subscriber(s)" if subs else ", Telegram off"
     )
     verdict_note = ", verdicts on" if review else ", verdicts off"
-    print(f"Running: scraping every {config.interval:g} min{bot_note}{verdict_note}. Ctrl+C to stop.")
+    linkedin_note = ", LinkedIn on" if config.linkedin else ""
+    print(f"Running: scraping every {config.interval:g} min{bot_note}{verdict_note}{linkedin_note}. Ctrl+C to stop.")
     try:
         while True:
             try:

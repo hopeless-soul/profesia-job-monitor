@@ -66,4 +66,5 @@ def test_reviewer_prompt_includes_research_and_backstory():
 
     assert prompt.startswith("# Duties — Offer Reviewer")
     assert "# Offer research" in prompt
+    assert "Write the verdict `content` in English" in prompt
     assert prompt.endswith("# Candidate backstory\n\nBACKSTORY-MARKER")

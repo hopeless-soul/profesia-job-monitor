@@ -54,6 +54,7 @@ data/
 ├── config.example.json  template for config.json                    (in the repo)
 ├── config.json          your searches, bot token, model settings    (you create this)
 ├── backstory.md         your experience, read by the offer reviewer (you create this, optional)
+├── projects/*.md        pet-project write-ups, added to the backstory (you create these, optional)
 ├── jobs.db              offer database                              (created on first run)
 └── subscribers.json     Telegram subscribers                        (created on first run)
 ```
@@ -104,6 +105,8 @@ $env:GOOGLE_API_KEY = "..."        # or ANTHROPIC_API_KEY / OPENAI_API_KEY
 **3. Add your backstory (for verdicts)**
 
 Save your experience as markdown in `data/backstory.md`: roles, stack, projects, years. The offer reviewer judges fit only from what this file says.
+
+Optionally, put one markdown file per pet project in `data/projects/` (the `projects` folder next to `backstory.md`). Every `*.md` there is appended to the backstory under a `## Pet project: <file name>` header, and the reviewer counts it as evidence, marked as a personal project.
 
 **4. Import old offers (only when upgrading from a `jobs.json` version)**
 

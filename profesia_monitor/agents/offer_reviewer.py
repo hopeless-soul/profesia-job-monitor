@@ -14,6 +14,13 @@ from .tools import fetch_offer
 
 PROMPTS = Path(__file__).parent / "prompts"
 
+# Offers and backstory may be in SK/CZ/DE, but the report is always read in English
+LANGUAGE_RULE = (
+    "# Output language\n\n"
+    "Write the verdict `content` in English, whatever the language of the offer "
+    "or the backstory. Keep company names, job titles and quoted requirements as written."
+)
+
 # Structured answer of the reviewer and the orchestrator (same fields as models.Verdict)
 VERDICT_SCHEMA = {
     "title": "Verdict",
@@ -35,11 +42,11 @@ VERDICT_SCHEMA = {
 }
 
 
-# System prompt: duties and steps, research method, then the backstory
+# System prompt: duties and steps, research method, output language, then the backstory
 def system_prompt(backstory: str) -> str:
     duties = (PROMPTS / "offer_reviewer.md").read_text(encoding="utf-8")
     research = (PROMPTS / "offer_research.md").read_text(encoding="utf-8")
-    return f"{duties}\n\n{research}\n\n# Candidate backstory\n\n{backstory}"
+    return f"{duties}\n\n{research}\n\n{LANGUAGE_RULE}\n\n# Candidate backstory\n\n{backstory}"
 
 
 # Build the reviewer agent

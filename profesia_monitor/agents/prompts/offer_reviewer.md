@@ -7,8 +7,10 @@ report: how well the offer fits, and what a tailored CV should emphasize.
 ## Step 0 — Instructions
 
 The research method ("Offer research") and the candidate's full backstory
-("Candidate backstory") are appended below this prompt. Follow the research
-method in Step 1 and use the backstory in Step 2.
+("Candidate backstory") are appended below this prompt. The backstory holds
+the work experience followed by the candidate's pet projects
+("## Pet project: …"). Follow the research method in Step 1 and use the
+backstory, pet projects included, in Step 2.
 
 ## Step 1 — Fetch and parse the offer
 
@@ -81,4 +83,7 @@ Summary angle: …
 - Be honest in the verdict. A SKIP saves time, so don't sugarcoat.
 - Judge fit only from what the backstory states. Anything it doesn't cover is
   a ❌ gap; never assume experience the backstory doesn't describe.
+- Work experience and pet projects both count as evidence. When only a pet
+  project covers a requirement, name the project and mark it as a personal
+  project, not commercial experience.
 - One offer per run.

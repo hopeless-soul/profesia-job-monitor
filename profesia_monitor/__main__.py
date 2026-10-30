@@ -266,6 +266,9 @@ def build_review(config: Config) -> Callable[[str], Verdict] | None:
         from .agents.orchestrator import build_orchestrator, evaluate
 
         backstory = config.backstory.read_text(encoding="utf-8")
+        # append pet projects (projects/*.md next to the backstory) as extra evidence
+        projects = sorted((config.backstory.parent / "projects").glob("*.md"))
+        backstory += "".join(f"\n\n## Pet project: {p.stem}\n\n{p.read_text(encoding='utf-8')}" for p in projects)
         return partial(evaluate, build_orchestrator(build_llm(config.model), backstory))
     except Exception as e:
         logging.warning("verdicts disabled: %s", e)

@@ -47,6 +47,11 @@ from .telegram import Bot, Subscribers, TelegramError, format_verdict, handle_up
 # Runtime files (config, jobs.db, subscribers, backstory) live in data/, shared with Docker's /data volume
 DEFAULT_CONFIG = Path("data/config.json")
 
+# ANSI colors for console output only (not logs); the os.system call switches on escape codes in old Windows consoles
+# 256-color codes, since the 16-color yellow looks more yellow than orange
+YELLOW, ORANGE, GREY, RESET = "\033[33m", "\033[38;5;208m", "\033[90m", "\033[0m"
+os.system("")
+
 # Background workers for verdicts, so scraping and /start replies never wait on the LLM
 VERDICTS = ThreadPoolExecutor(max_workers=2, thread_name_prefix="verdict")
 
@@ -204,7 +209,6 @@ def run_once(
     scraped: list[Job] = []
     for query in config.searches:
         jobs = scrape(query, max_pages=config.pages, delay=config.delay)
-        print(f"{' '.join([repr(query.keyword), *query.segments])}: {len(jobs)} offers")
         scraped.extend(jobs)
 
     # LinkedIn searches; details are fetched only for jobs not stored yet
@@ -224,10 +228,12 @@ def run_once(
     # print new offers and totals
     for job in added:
         salary = job.salary.raw if job.salary else "-"
-        print(f"NEW {job.source} {job.id}  {job.title} | {job.company} | {salary}")
+        print(f"{YELLOW}NEW {job.source} {job.id}  {job.title} | {job.company} | {salary}{RESET}")
+    # summary line in orange, then a blank line
     print(
-        f"Scraped {len(scraped)}, new {len(added)}, dup {dups}, total {total} in {config.db}"
+        f"{ORANGE}Scraped {len(scraped)}, new {len(added)}, dup {dups}, total {total} in {config.db}{RESET}"
     )
+    print()
 
     # notify subscribers and remember which message each chat got
     message_ids: dict[str, dict[int, int]] = {}
@@ -304,9 +310,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.log:
         sys.stdout = sys.stderr = open(args.log, "a", encoding="utf-8", buffering=1)
         print(f"--- {datetime.now().isoformat(timespec='seconds')}")
+    # log lines get a grey timestamp in brackets, same format as the run header
     logging.basicConfig(
         level=logging.INFO if args.verbose else logging.WARNING,
-        format="%(levelname)s %(message)s",
+        format=f"{GREY}[%(asctime)s]{RESET} %(levelname)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
     )
 
     # Load config
@@ -351,11 +359,11 @@ def main(argv: list[str] | None = None) -> int:
     interval = config.interval * 60
     next_run = time.monotonic()
     bot_note = (
-        f", {len(subs.chats)} Telegram subscriber(s)" if subs else ", Telegram off"
+        f"\nTelegram: {len(subs.chats)} Telegram subscriber(s)" if subs else ", Telegram: OFF"
     )
-    verdict_note = ", verdicts on" if review else ", verdicts off"
-    linkedin_note = ", LinkedIn on" if config.linkedin else ""
-    print(f"Running: scraping every {config.interval:g} min{bot_note}{verdict_note}{linkedin_note}. Ctrl+C to stop.")
+    verdict_note = "\nVerdicts: ON" if review else "\nVerdicts: OFF"
+    linkedin_note = "\nLinkedIn: ON" if config.linkedin else ""
+    print(f"Running: scraping every {config.interval:g} min. Ctrl+C to stop.{bot_note}{verdict_note}{linkedin_note}\n")
     try:
         while True:
             try:

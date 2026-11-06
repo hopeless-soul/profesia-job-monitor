@@ -72,6 +72,9 @@ def scrape(
     session.headers.setdefault("User-Agent", USER_AGENT)
     url = query.url()
     jobs: dict[int, Job] = {}
+    # totals for the one summary log line at the end
+    fetched = 0
+    pages = 0
 
     for page in range(1, max_pages + 1):
         if page > 1:
@@ -86,10 +89,12 @@ def scrape(
             break
 
         page_jobs, has_next = parse_listing(resp.text)
-        log.info("page %d: %d jobs", page, len(page_jobs))
+        pages += 1
+        fetched += len(page_jobs)
         for job in page_jobs:
             jobs.setdefault(job.id, job)
         if not page_jobs or not has_next:
             break
 
+    log.info("%r: %d jobs from %d pages", query.keyword, fetched, pages)
     return list(jobs.values())

@@ -13,6 +13,7 @@ from profesia_monitor.telegram import (
 )
 
 
+# Telegram stand-in that records sends and edits; chats in `blocked` refuse messages
 class FakeBot:
     def __init__(self, updates=(), blocked=()):
         self.updates = list(updates)
@@ -33,12 +34,17 @@ class FakeBot:
         self.edits.append((chat_id, message_id, text))
 
 
+# an update as Telegram sends it for a text message
 def message(update_id, chat_id, text):
     return {"update_id": update_id, "message": {"chat": {"id": chat_id, "username": f"u{chat_id}"}, "text": text}}
 
 
+# a stored Profesia offer for the message tests
 def job(i, title="Frontend developer"):
-    return Job(id=i, title=title, url=f"https://www.profesia.sk/praca/x/O{i}", company="ACME <s.r.o.>", uuid=f"u{i}")
+    return Job(
+        id=i, title=title, url=f"https://www.profesia.sk/praca/x/O{i}", company="ACME <s.r.o.>",
+        uuid=f"u{i}", source="profesia",
+    )
 
 
 # /start and /stop update subscribers, and each update is handled once
@@ -86,6 +92,7 @@ def test_notify_sends_one_message_per_offer_and_returns_ids(tmp_path, monkeypatc
     assert ids == {"u1": {1: 1, 2: 3}, "u2": {1: 2, 2: 4}}
 
 
+# Response stand-in with a fixed JSON body
 class FakeResponse:
     def __init__(self, data):
         self._data = data
@@ -94,9 +101,8 @@ class FakeResponse:
         return self._data
 
 
+# Session stand-in whose first `fail_times` posts time out, then succeed
 class FlakySession:
-    # Raises a network timeout on the first `fail_times` calls, then succeeds.
-
     def __init__(self, fail_times):
         self.fail_times = fail_times
         self.calls = 0
@@ -141,7 +147,7 @@ def test_notify_drops_chats_that_blocked_the_bot(tmp_path):
     assert [chat for chat, _ in bot.sent] == [1]
 
 
-# the details line names the offer's source
+# the details line names the offer's source, using the provider's label
 def test_format_shows_source():
     offer = job(1)
     assert "ACME &lt;s.r.o.&gt; · Profesia" in format_verdict(offer)

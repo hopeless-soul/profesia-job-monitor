@@ -1,5 +1,5 @@
 @echo off
-rem Start the Profesia job monitor locally (uses data\config.json, data\jobs.db, data\subscribers.json)
+rem Start the Profesia job monitor locally (uses data\configs\config.yaml, data\jobs.db, data\subscribers.json)
 cd /d "%~dp0"
 
 rem require the virtual environment
@@ -12,9 +12,9 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 rem require the config
-if not exist "data\config.json" (
-    echo Error: data\config.json not found. Please run:
-    echo copy data\config.example.json data\config.json
+if not exist "data\configs\config.yaml" (
+    echo Error: data\configs\config.yaml not found. Please run:
+    echo copy data\configs\config.example.yaml data\configs\config.yaml
     echo and fill in your searches, Telegram token and model settings.
     pause
     exit /b 1

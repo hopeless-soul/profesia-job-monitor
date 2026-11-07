@@ -31,7 +31,7 @@ Profesia needs no browser: its listing pages are server-rendered HTML, so scrapi
 | Scraping | `requests` ≥ 2.31, `beautifulsoup4` ≥ 4.12 |
 | Storage | SQLite (Python's built-in `sqlite3`) |
 | AI agents | `langchain` ≥ 1.0 (`create_agent`, LangGraph under the hood), `langchain-google-genai` ≥ 4.0 by default; `langchain-anthropic` or `langchain-openai` optional |
-| LinkedIn (optional) | `mcp` ≥ 1.0 client for [`mcp-server-linkedin`](https://github.com/stickerdaniel/linkedin-mcp-server), started with `uvx` |
+| LinkedIn (optional) | `mcp` ≥ 2.0 client for [`mcp-server-linkedin`](https://github.com/stickerdaniel/linkedin-mcp-server), started with `uvx` |
 | Notifications | Telegram Bot API, long polling (no webhook or public server) |
 | Containers | Docker + Docker Compose, [sqlite-web](https://github.com/coleifer/sqlite-web) viewer |
 | Tests | `pytest` ≥ 8, `jsonschema` ≥ 4.20 |
@@ -54,12 +54,16 @@ Every runtime file lives in `data/`. It's git-ignored, and Docker mounts it as `
 
 ```
 data/
-├── config.example.json  template for config.json                    (in the repo)
-├── config.json          your searches, bot token, model settings    (you create this)
-├── backstory.md         your experience, read by the offer reviewer (you create this, optional)
-├── projects/*.md        pet-project write-ups, added to the backstory (you create these, optional)
-├── jobs.db              offer database                              (created on first run)
-└── subscribers.json     Telegram subscribers                        (created on first run)
+├── configs/
+│   ├── config.yaml                shared settings: bot token, model       (you create this)
+│   ├── profesia_sk.example.yaml   template for Profesia.sk searches       (in the repo)
+│   ├── profesia_sk.yaml           Profesia.sk searches and retries        (you create this, optional)
+│   ├── linkedin.example.yaml      template for LinkedIn searches          (in the repo)
+│   └── linkedin.yaml              LinkedIn searches and retries           (you create this, optional)
+├── backstory.md                   your experience, read by the offer reviewer (you create this, optional)
+├── projects/*.md                  pet-project write-ups, added to the backstory (you create these, optional)
+├── jobs.db                        offer database                          (created on first run)
+└── subscribers.json               Telegram subscribers                    (created on first run)
 ```
 
 ### Option A: run locally
@@ -89,13 +93,18 @@ For the Anthropic or OpenAI provider, also run `pip install langchain-anthropic`
 **2. Create the config**
 
 ```bash
-cp data/config.example.json data/config.json      # PowerShell: Copy-Item data\config.example.json data\config.json
+cp data/configs/config.example.yaml data/configs/config.yaml      # PowerShell: Copy-Item data\configs\config.example.yaml data\configs\config.yaml
 ```
 
-Open `data/config.json` (VS Code autocompletes it from the schema) and:
+Copy the provider examples you want, then edit them. VS Code autocompletes each file from its schema:
 
-- edit `searches` (see [Search filters](#search-filters))
-- set `telegram.token` to your bot token, or leave it `null` and use `TELEGRAM_BOT_TOKEN`
+```bash
+cp data/configs/profesia_sk.example.yaml data/configs/profesia_sk.yaml   # Profesia.sk searches
+cp data/configs/linkedin.example.yaml data/configs/linkedin.yaml         # LinkedIn searches (optional)
+```
+
+- in `profesia_sk.yaml`, edit `searches` (see [Search filters](#search-filters))
+- set `telegram.token` in `config.yaml` to your bot token, or leave it `null` and use `TELEGRAM_BOT_TOKEN`
 - set `model.api_key`, or leave it `null` and use the provider's env var
 
 API keys can also come from the environment:
@@ -152,7 +161,7 @@ It scrapes now and then every `interval` minutes. Send `/start` to your bot in T
 On Windows you can double-click **`run-monitor.bat`** instead. It runs the same thing **locally** with the `.venv` Python (`python -m profesia_monitor -v`); it does **not** start Docker. Before starting, it checks that:
 
 - `.venv` exists (otherwise it prints the install commands)
-- `data\config.json` exists (otherwise it tells you to copy `data\config.example.json`)
+- `data\configs\config.yaml` exists (otherwise it tells you to copy `data\configs\config.example.yaml`)
 - the Docker `monitor` container isn't running (otherwise it asks you to run `docker compose stop monitor`, since both would send every offer twice)
 
 To run in the background on Windows:
@@ -169,10 +178,10 @@ Start-Process .venv\Scripts\pythonw.exe `
 
 ```bash
 cp jobs.json data/
-docker compose run --rm --no-deps monitor python -m profesia_monitor -c /data/config.json --import-json /data/jobs.json
+docker compose run --rm --no-deps monitor python -m profesia_monitor -c /data/configs/config.yaml --import-json /data/jobs.json
 ```
 
-**2. Secrets (optional).** Copy `.env.example` to `.env` and fill in `TELEGRAM_BOT_TOKEN` and `GOOGLE_API_KEY`, unless they're already in `data/config.json`.
+**2. Secrets (optional).** Copy `.env.example` to `.env` and fill in `TELEGRAM_BOT_TOKEN` and `GOOGLE_API_KEY`, unless they're already in `data/configs/config.yaml`.
 
 **3. Start**
 
@@ -184,7 +193,7 @@ This is the only way to start the Docker version; `run-monitor.bat` always runs 
 
 | Service | What it does |
 |---|---|
-| `monitor` | Runs `python -m profesia_monitor -c /data/config.json -v`, restarting unless stopped |
+| `monitor` | Runs `python -m profesia_monitor -c /data/configs/config.yaml -v`, restarting unless stopped |
 | `viewer` | sqlite-web at http://localhost:8080 for browsing `jobs.db`. It listens on localhost only and **can edit** the database. |
 
 Everyday commands:
@@ -193,55 +202,54 @@ Everyday commands:
 docker compose logs -f monitor        # follow output
 docker compose stop monitor           # pause monitoring
 docker compose down                   # stop everything
-docker compose run --rm --no-deps monitor python -m profesia_monitor -c /data/config.json --once -v   # single run
+docker compose run --rm --no-deps monitor python -m profesia_monitor -c /data/configs/config.yaml --once -v   # single run
 ```
 
 > **Run either locally or in Docker, not both.** They share `data/`, so running both would scrape and notify every offer twice.
 
 ## Configuration
 
-`data/config.json` is read by default; `-c FILE` picks another file. Relative paths in it resolve against the config's folder. The full schema is in [`schemas/config.schema.json`](schemas/config.schema.json), and [`data/config.example.json`](data/config.example.json) is a starting point.
+`data/configs/config.yaml` holds the shared settings. Each job source has its own file in `data/configs/`, and a source is on when its file exists: `data/configs/profesia_sk.yaml` for Profesia.sk and `data/configs/linkedin.yaml` for LinkedIn. `-c FILE` picks another main file; the provider files are read from the same folder. Relative paths resolve against the config's folder. The committed examples are the `*.example.yaml` files in `data/configs/`.
 
-```json
-{
-  "$schema": "../schemas/config.schema.json",
-  "db": "jobs.db",
-  "backstory": "backstory.md",
-  "pages": 3,
-  "delay": 1.5,
-  "interval": 60,
-  "count_days": 7,
-  "searches": [
-    { "keyword": "c#", "segments": ["bratislavsky-kraj"], "remote_work": 2, "min_salary": 2000 },
-    { "keyword": "python", "segments": ["informacne-technologie", "plny-uvazok"] }
-  ],
-  "telegram": { "token": null, "subscribers": "subscribers.json" },
-  "model": { "provider": "google", "name": "gemini-2.5-flash", "temperature": 0.0, "max_tokens": 8192, "api_key": null },
-  "linkedin": {
-    "date_posted": "past_24_hours",
-    "max_pages": 1,
-    "searches": [{ "keywords": "python developer in Slovakia", "work_type": "remote,hybrid" }]
-  }
-}
+```yaml
+db: ../jobs.db
+backstory: ../backstory.md
+interval: 60
+telegram:
+  token: null
+  subscribers: ../subscribers.json
+model:
+  provider: google
+  name: gemini-2.5-flash
+  temperature: 0.0
+  max_tokens: 8192
+  api_key: null
 ```
 
 | Key | Default | Meaning |
 |---|---|---|
-| `db` | `jobs.db` | SQLite database |
-| `backstory` | `backstory.md` | Your experience, for the offer reviewer |
-| `pages` | `3` | Max listing pages per search (20 offers per page) |
-| `delay` | `1.5` | Seconds between page requests |
+| `db` | `../jobs.db` | SQLite database (paths resolve against `data/configs/`, so `../` is `data/`) |
+| `backstory` | `../backstory.md` | Your experience, for the offer reviewer |
 | `interval` | `60` | Minutes between scrapes |
-| `count_days` | `null` | Only offers from the last N days; a search's own `count_days` overrides it |
-| `searches` | required | List of searches (below) |
 | `telegram.token` | `null` | Bot token; `null` falls back to `TELEGRAM_BOT_TOKEN` |
-| `telegram.subscribers` | `subscribers.json` | Subscriber list |
+| `telegram.subscribers` | `../subscribers.json` | Subscriber list |
 | `model.provider` | `anthropic` | `google`, `anthropic` or `openai` |
 | `model.name` | `null` | `null` uses the default: `gemini-2.5-flash`, `claude-sonnet-4-5`, `gpt-4o-mini` |
 | `model.temperature` | `0.0` | 0 gives the most consistent verdicts |
 | `model.max_tokens` | `8192` | Keep it high: thinking models spend part of it on reasoning, and around 1024 the verdict gets cut off |
 | `model.api_key` | `null` | `null` falls back to `GOOGLE_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
-| `linkedin` | `null` | LinkedIn source; leave it out to turn LinkedIn off (see [LinkedIn source](#linkedin-source)) |
+### Profesia.sk source
+
+`data/configs/profesia_sk.yaml` holds the Profesia searches. Without this file the Profesia source is off. Example: [`data/configs/profesia_sk.example.yaml`](data/configs/profesia_sk.example.yaml).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `pages` | `3` | Max listing pages per search (20 offers per page) |
+| `delay` | `1.5` | Seconds between page requests |
+| `count_days` | `null` | Only offers from the last N days; a search's own `count_days` overrides it |
+| `retry.attempts` | `3` | Tries per run, including the first (1 to 10) |
+| `retry.delay` | `30` | Seconds between tries |
+| `searches` | required | List of searches (below) |
 
 ### Search filters
 
@@ -266,16 +274,19 @@ Common segments:
 
 ### LinkedIn source
 
-With a `linkedin` section, every run also searches LinkedIn through the [LinkedIn MCP server](https://github.com/stickerdaniel/linkedin-mcp-server). For each search it collects job IDs, skips the ones already stored, opens the rest and reads company, title, location, posted time and work type from the job page. The jobs then go through the same store, Telegram messages and verdicts as Profesia offers.
+With `data/configs/linkedin.yaml`, every run also searches LinkedIn through the [LinkedIn MCP server](https://github.com/stickerdaniel/linkedin-mcp-server). For each search it collects job IDs, skips the ones already stored, opens the rest and reads company, title, location, posted time and work type from the job page. The jobs then go through the same store, Telegram messages and verdicts as Profesia offers. Example: [`data/configs/linkedin.example.yaml`](data/configs/linkedin.example.yaml).
 
 | Key | Default | Meaning |
 |---|---|---|
-| `linkedin.searches[].keywords` | required | Search text. Put the location in it (`"python developer in Slovakia"`): LinkedIn ignores a separate location filter |
-| `linkedin.searches[].work_type` | `null` | Comma-separated `on_site`, `remote`, `hybrid` |
-| `linkedin.searches[].experience_level` | `null` | Comma-separated `internship`, `entry`, `associate`, `mid_senior`, `director`, `executive` |
-| `linkedin.searches[].job_type` | `null` | Comma-separated `full_time`, `part_time`, `contract`, `temporary`, `volunteer`, `internship`, `other` |
-| `linkedin.date_posted` | `past_24_hours` | `past_hour`, `past_24_hours`, `past_week` or `past_month` |
-| `linkedin.max_pages` | `1` | Result pages per search, 1 to 10 |
+| `searches[].keywords` | required | Search text. Put the location in it (`"python developer in Slovakia"`): LinkedIn ignores a separate location filter |
+| `searches[].work_type` | `null` | Comma-separated `on_site`, `remote`, `hybrid` |
+| `searches[].experience_level` | `null` | Comma-separated `internship`, `entry`, `associate`, `mid_senior`, `director`, `executive` |
+| `searches[].job_type` | `null` | Comma-separated `full_time`, `part_time`, `contract`, `temporary`, `volunteer`, `internship`, `other` |
+| `date_posted` | `past_24_hours` | `past_hour`, `past_24_hours`, `past_week` or `past_month` |
+| `max_pages` | `1` | Result pages per search, 1 to 10 |
+| `delay` | `1.5` | Seconds between job detail requests |
+| `retry.attempts` | `3` | Tries per run, including the first (1 to 10) |
+| `retry.delay` | `30` | Seconds between tries |
 
 Setup:
 
@@ -298,7 +309,7 @@ Limits:
 | `--segment SLUG`, `--remote N`, `--min-salary N`, `--salary-period m\|h` | Filters for a one-off `KEYWORD` search |
 | `--once` | Scrape once, wait for verdicts, exit |
 | `--interval MINUTES` | Minutes between scrapes |
-| `-c FILE` | Config file (default `data/config.json`) |
+| `-c FILE` | Main config file (default `data/configs/config.yaml`); the provider files are read from the same folder |
 | `--db FILE` | Database file |
 | `--days N` | Only offers from the last N days, for every search |
 | `--pages N` | Max listing pages per search |
@@ -348,21 +359,29 @@ To add a subagent, create `agents/<name>.py` with `build_<name>(llm)` and an `as
 
 ```
 profesia_monitor/
-├── __main__.py           CLI, main loop, verdict callback
-├── config.py             Config loading and validation
-├── scraper.py            HTTP fetching, Query builder, pagination
-├── parser.py             HTML parsing (no network)
+├── __main__.py           CLI, main loop, run_once with per-source retries
+├── config.py             Main config (config.yaml) and loading the provider files
+├── errors.py             ConfigError
+├── sources.py            SourceProvider base class, SourceProviderError, RetryPolicy
 ├── models.py             Dataclasses: Job, Salary, Verdict
-├── linkedin.py           LinkedIn source via the LinkedIn MCP server
 ├── store.py              SQLite store and legacy jobs.json import
 ├── telegram.py           Bot API client, subscribers, message formatting
+├── providers/
+│   ├── __init__.py       Registry: build_providers(config), source labels
+│   ├── profesia_sk/      Profesia.sk source
+│   │   ├── config.py     profesia_sk.yaml: searches, pages, delay, retry
+│   │   ├── scraper.py    Query builder, HTTP fetching, pagination
+│   │   ├── parser.py     HTML parsing (no network)
+│   │   └── provider.py   ProfesiaProvider
+│   └── linkedin/         LinkedIn source via the LinkedIn MCP server
+│       ├── config.py     linkedin.yaml: searches, filters, delay, retry
+│       └── provider.py   LinkedInProvider
 └── agents/
     ├── llm.py            Chat model from the config's `model` section
     ├── tools.py          fetch_offer tool
     ├── orchestrator.py   Main agent; evaluate(url) -> Verdict
     ├── offer_reviewer.py Subagent and its wrapper as an orchestrator tool
     └── prompts/          Agent instructions (markdown)
-schemas/                  JSON Schema for config.json
 tests/                    pytest suite and HTML fixtures
 Dockerfile, docker-compose.yml, .env.example
 run-monitor.bat           Windows launcher for a local run
@@ -380,7 +399,7 @@ Design notes:
 
 | Symptom | Fix |
 |---|---|
-| `data/config.json not found` | Do [step 2](#option-a-run-locally), or pass `-c FILE` |
+| `data/configs/config.yaml not found` | Do [step 2](#option-a-run-locally), or pass `-c FILE` |
 | `config: unknown keys ['out']` | Your config predates SQLite: rename `"out": "jobs.json"` to `"db": "jobs.db"` |
 | `verdicts disabled: …` | The message names the cause: the provider package isn't installed, the API key is missing, or `backstory.md` isn't at the `backstory` path |
 | `verdict failed for offer …` with a JSON / structured output error | The answer was cut off; raise `model.max_tokens` (8192 works for Gemini 2.5+) |

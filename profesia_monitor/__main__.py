@@ -1,17 +1,17 @@
-"""CLI. By default runs forever, scraping every search in data/config.json once per
-`interval` minutes (default 60). Ctrl+C stops it.
+"""CLI. By default runs forever, scraping every job source once per `interval` minutes
+(default 60). Ctrl+C stops it. Sources come from profesia_sk.yaml and linkedin.yaml next to the config (data/configs/).
 
     python -m profesia_monitor
     python -m profesia_monitor --interval 30        # scrape every 30 min
     python -m profesia_monitor --once               # single run, then exit
-    python -m profesia_monitor "c#" --remote 2 --once   # one-off search, ignores config searches
+    python -m profesia_monitor "c#" --remote 2 --once   # one-off Profesia search, ignores the config searches
     python -m profesia_monitor --import-json jobs.json  # one-time import of the old JSON store
 
 Offers are stored in SQLite (config `db`). With a Telegram token (config
 telegram.token or TELEGRAM_BOT_TOKEN), each new offer is sent to everyone who
 sent /start to the bot. With an LLM configured (config `model`), every new
 offer then gets a verdict that is saved and added to its Telegram message.
-With a `linkedin` section in the config, LinkedIn searches run alongside (local runs only).
+A `linkedin.yaml` next to the config turns LinkedIn searches on (local runs only).
 """
 
 from __future__ import annotations
@@ -28,10 +28,12 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 
-from . import linkedin
-from .config import Config, ConfigError, load_config
+from .config import Config, load_config
+from .errors import ConfigError
 from .models import Job, Verdict
-from .scraper import Query, scrape
+from .providers import build_providers
+from .providers.profesia_sk.config import ProfesiaConfig, Query
+from .sources import SourceProvider, SourceProviderError
 from .store import (
     connect,
     count_jobs,
@@ -45,7 +47,7 @@ from .store import (
 from .telegram import Bot, Subscribers, TelegramError, format_verdict, handle_updates, notify
 
 # Runtime files (config, jobs.db, subscribers, backstory) live in data/, shared with Docker's /data volume
-DEFAULT_CONFIG = Path("data/config.json")
+DEFAULT_CONFIG = Path("data/configs/config.yaml")
 
 # ANSI colors for console output only (not logs); the os.system call switches on escape codes in old Windows consoles
 # 256-color codes, since the 16-color yellow looks more yellow than orange
@@ -72,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         type=Path,
         default=DEFAULT_CONFIG,
-        help="config file (default: data/config.json)",
+        help="config file (default: data/configs/config.yaml)",
     )
     p.add_argument("--db", type=Path, help="SQLite database (overrides config)")
     p.add_argument(
@@ -153,43 +155,50 @@ def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         try:
             config = load_config(args.config)
         except ConfigError as e:
-            parser.error(f"{args.config}: {e}")
+            parser.error(str(e))  # the error already names the file
     elif config_given or args.keyword is None:
         # require either explicit config or a one-off keyword
         parser.error(
-            f"{args.config} not found; copy data/config.example.json to data/config.json or pass a KEYWORD"
+            f"{args.config} not found; copy data/configs/config.example.yaml to data/configs/config.yaml or pass a KEYWORD"
         )
     else:
         config = Config()
 
     # one-off keyword search overrides all config searches
     if args.keyword is not None:
-        query = Query(
-            args.keyword, args.segment, args.remote, args.min_salary, args.salary_period
-        )
+        # pydantic rejects a bad keyword or segment, and its ValidationError is a ValueError
         try:
-            query.url()
+            query = Query(
+                keyword=args.keyword,
+                segments=args.segment,
+                remote_work=args.remote,
+                min_salary=args.min_salary,
+                salary_period=args.salary_period,
+            )
         except ValueError as e:
             parser.error(str(e))
-        config.searches = [query]
+        # keep the Profesia file's paging and retry settings, replace only the searches
+        if config.profesia is None:
+            config.profesia = ProfesiaConfig(searches=[query])
+        config.profesia.searches = [query]
         config.linkedin = None  # one-off searches are Profesia-only
 
-    # apply days filter to all searches
-    if args.days is not None:
-        for query in config.searches:
+    # apply days filter to all Profesia searches
+    if args.days is not None and config.profesia:
+        for query in config.profesia.searches:
             query.count_days = args.days
 
     # override database location
     if args.db is not None:
         config.db = args.db
 
-    # override max pages per search
-    if args.pages is not None:
-        config.pages = args.pages
+    # override max pages per search (Profesia)
+    if args.pages is not None and config.profesia:
+        config.profesia.pages = args.pages
 
-    # override request delay
-    if args.delay is not None:
-        config.delay = args.delay
+    # override request delay (Profesia)
+    if args.delay is not None and config.profesia:
+        config.profesia.delay = args.delay
 
     # override scrape interval, must be positive
     if args.interval is not None:
@@ -198,24 +207,40 @@ def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         config.interval = args.interval
     return config
 
+# Fetch one source, retrying a SourceProviderError per the provider's retry policy; None when every attempt failed
+def fetch_source(provider: SourceProvider, known: Callable[[list[int]], set[int]]) -> list[Job] | None:
+    attempts, delay = provider.retry.attempts, provider.retry.delay
+    for attempt in range(1, attempts + 1):
+        try:
+            return provider.fetch(known)
+        except SourceProviderError as e:
+            # the last attempt gives up; earlier ones wait and try again
+            if attempt == attempts:
+                logging.warning("%s skipped after %d attempt(s): %s", provider.name, attempts, e)
+                return None
+            logging.warning("%s attempt %d of %d failed, retrying in %gs: %s", provider.name, attempt, attempts, delay, e)
+            time.sleep(delay)
+    return None
+
+
 # Run Scrape Once
 def run_once(
     config: Config,
     bot: Bot | None,
     subs: Subscribers | None,
     review: Callable[[str], Verdict] | None = None,
+    providers: list[SourceProvider] | None = None,
 ) -> None:
-    # scrape every search
-    scraped: list[Job] = []
-    for query in config.searches:
-        jobs = scrape(query, max_pages=config.pages, delay=config.delay)
-        scraped.extend(jobs)
+    providers = build_providers(config) if providers is None else providers
 
-    # LinkedIn searches; details are fetched only for jobs not stored yet
-    if config.linkedin:
+    # fetch every source; a failing one is retried, then logged and skipped while the others still run
+    scraped: list[Job] = []
+    for provider in providers:
         with closing(connect(config.db)) as conn:
-            jobs = linkedin.fetch_jobs(config.linkedin, partial(known_ids, conn, "linkedin"))
-        print(f"linkedin: {len(jobs)} offers")
+            jobs = fetch_source(provider, partial(known_ids, conn, provider.name))
+        if jobs is None:
+            continue
+        print(f"{provider.name}: {len(jobs)} offers")
         scraped.extend(jobs)
 
     # store offers; new ones get a uuid and no verdict yet, duplicates are stored but not returned

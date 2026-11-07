@@ -12,6 +12,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # application code, including agents/prompts
 COPY profesia_monitor/ profesia_monitor/
 
-# config.json, jobs.db, subscribers.json and backstory.md live in the mounted volume
+# configs/ (config.yaml and the provider files), jobs.db, subscribers.json and backstory.md live in the mounted volume
 VOLUME /data
-CMD ["python", "-m", "profesia_monitor", "-c", "/data/config.json", "-v"]
+CMD ["python", "-m", "profesia_monitor", "-c", "/data/configs/config.yaml", "-v"]

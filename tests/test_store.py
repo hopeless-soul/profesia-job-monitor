@@ -3,8 +3,10 @@ import sqlite3
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from profesia_monitor.models import Job, Verdict
-from profesia_monitor.parser import parse_listing
+from profesia_monitor.providers.profesia_sk.parser import parse_listing
 from profesia_monitor.store import (
     connect,
     count_jobs,
@@ -39,7 +41,7 @@ def test_upsert_keeps_unique_ids_first_seen_uuid_and_verdict(tmp_path):
     assert [j.id for j in added] == [3]
     assert added[0].uuid and added[0].first_seen == T2
     assert count_jobs(conn) == 3
-    stored = get_job(conn, 1)
+    stored = get_job(conn, 1, "profesia")
     assert stored.title == "New title"
     assert (stored.first_seen, stored.last_seen) == (T1, T2)
     assert stored.uuid == first[0].uuid
@@ -59,7 +61,7 @@ def test_upsert_drops_duplicates_within_one_scrape(tmp_path):
 # a legacy jobs.json imports with its timestamps and fresh UUIDs, and re-importing adds nothing
 def test_import_legacy_json_round_trips(tmp_path):
     html = (ROOT / "tests" / "fixtures" / "listing_page1.html").read_text(encoding="utf-8")
-    jobs = [replace(j, first_seen=T1, last_seen=T2) for j in parse_listing(html)[0]]
+    jobs = [replace(j, first_seen=T1, last_seen=T2) for j in parse_listing(html, "profesia")[0]]
     legacy = tmp_path / "jobs.json"
     rows = [{k: v for k, v in j.to_dict().items() if k not in ("uuid", "verdict")} for j in jobs]
     legacy.write_text(json.dumps({"schema_version": 1, "updated_at": T2, "jobs": rows}), encoding="utf-8")
@@ -69,9 +71,16 @@ def test_import_legacy_json_round_trips(tmp_path):
     assert insert_jobs(conn, load_jobs(legacy)) == 0
 
     for original in jobs:
-        stored = get_job(conn, original.id)
+        stored = get_job(conn, original.id, "profesia")
         assert stored.uuid
         assert replace(stored, uuid=None) == original
+
+
+# legacy rows written before the source field existed load as Profesia offers
+def test_legacy_row_without_source_loads_as_profesia():
+    row = {"id": 1, "title": "Dev", "url": "https://example.com/1"}
+
+    assert Job.from_dict(row).source == "profesia"
 
 
 # the same ID on two sources is two offers
@@ -81,7 +90,7 @@ def test_same_id_on_two_sources_is_two_offers(tmp_path):
     added = upsert_jobs(conn, [job(1, "A"), job(1, "B", source="linkedin")], seen_at=T1)
 
     assert len(added) == 2
-    assert get_job(conn, 1).title == "A"
+    assert get_job(conn, 1, "profesia").title == "A"
     assert get_job(conn, 1, "linkedin").title == "B"
     assert known_ids(conn, "linkedin", [1, 2]) == {1}
 
@@ -111,6 +120,15 @@ def test_offers_without_company_are_never_duplicates(tmp_path):
     assert [j.id for j in added] == [1, 2]
 
 
+# get_job needs the source: the same ID on two sources must not be picked up silently
+def test_get_job_requires_a_source(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    upsert_jobs(conn, [job(1)], seen_at=T1)
+
+    with pytest.raises(TypeError):
+        get_job(conn, 1)
+
+
 # a database from before the LinkedIn source keeps its rows and messages, now marked as Profesia
 def test_old_database_is_migrated(tmp_path):
     db = tmp_path / "jobs.db"
@@ -134,7 +152,7 @@ def test_old_database_is_migrated(tmp_path):
 
     conn = connect(db)
 
-    stored = get_job(conn, 1)
+    stored = get_job(conn, 1, "profesia")
     assert (stored.uuid, stored.source, stored.verdict.tag) == ("u1", "profesia", "GO")
     assert [tuple(r) for r in conn.execute("SELECT * FROM offer_messages")] == [("u1", 10, 100)]
     # the new key allows the same ID on another source, and the messages table still links to offers

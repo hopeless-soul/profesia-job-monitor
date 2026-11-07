@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
-from dataclasses import dataclass, field
-from typing import Literal
 
 import requests
 
-from .models import Job
-from .parser import BASE_URL, parse_listing
+from ...models import Job
+from .config import Query
+from .parser import parse_listing
 
 log = logging.getLogger(__name__)
 
@@ -19,47 +17,12 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
-_SLUG_RE = re.compile(r"^[a-z0-9-]+$")
-
-
-@dataclass
-class Query:
-    keyword: str
-    # Path-segment filters, e.g. ["bratislavsky-kraj", "informacne-technologie"].
-    segments: list[str] = field(default_factory=list)
-    # 0 = on-site only, 1 = remote only, 2 = partially remote.
-    remote_work: Literal[0, 1, 2] | None = None
-    min_salary: int | None = None
-    salary_period: Literal["m", "h"] = "m"
-    # Only offers posted in the last N days. Offers expire after ~31 days,
-    # so values >= 31 behave like no filter.
-    count_days: int | None = None
-
-    def url(self) -> str:
-        for s in self.segments:
-            if not _SLUG_RE.match(s):
-                raise ValueError(f"invalid path segment: {s!r}")
-        path = "".join(f"{s}/" for s in self.segments)
-        return f"{BASE_URL}/praca/{path}"
-
-    def params(self, page: int) -> dict[str, str | int]:
-        params: dict[str, str | int] = {
-            "search_anywhere": self.keyword,
-            "sort_by": "relevance",
-            "page_num": page,
-        }
-        if self.remote_work is not None:
-            params["remote_work"] = self.remote_work
-        if self.min_salary is not None:
-            params["salary"] = self.min_salary
-            params["salary_period"] = self.salary_period
-        if self.count_days is not None:
-            params["count_days"] = self.count_days
-        return params
 
 
 def scrape(
     query: Query,
+    *,
+    source: str,
     max_pages: int = 3,
     delay: float = 1.5,
     session: requests.Session | None = None,
@@ -88,7 +51,7 @@ def scrape(
             log.warning("page %d failed, keeping %d jobs", page, len(jobs), exc_info=True)
             break
 
-        page_jobs, has_next = parse_listing(resp.text)
+        page_jobs, has_next = parse_listing(resp.text, source)
         pages += 1
         fetched += len(page_jobs)
         for job in page_jobs:

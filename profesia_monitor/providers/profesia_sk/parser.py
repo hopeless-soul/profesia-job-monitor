@@ -6,7 +6,7 @@ import re
 
 from bs4 import BeautifulSoup, Tag
 
-from .models import Job, Salary
+from ...models import Job, Salary
 
 BASE_URL = "https://www.profesia.sk"
 
@@ -57,7 +57,7 @@ def _text(row: Tag, selector: str) -> str | None:
     return _clean(el.get_text()) if el else None
 
 
-def parse_row(row: Tag) -> Job | None:
+def parse_row(row: Tag, source: str) -> Job | None:
     # Parse one `li.list-row` card. Returns None for rows that are not offers.
     link = row.select_one("h2 a[id^=offer]")
     if not link:
@@ -86,12 +86,13 @@ def parse_row(row: Tag) -> Job | None:
         salary=salary,
         labels=labels,
         posted_text=_text(row, ".list-footer .info"),
+        source=source,
     )
 
 
-def parse_listing(html: str) -> tuple[list[Job], bool]:
+def parse_listing(html: str, source: str) -> tuple[list[Job], bool]:
     # Return (jobs on this page, whether a next page exists).
     soup = BeautifulSoup(html, "html.parser")
-    jobs = [job for row in soup.select("li.list-row") if (job := parse_row(row))]
+    jobs = [job for row in soup.select("li.list-row") if (job := parse_row(row, source))]
     has_next = soup.select_one("ul.pagination a.next") is not None
     return jobs, has_next

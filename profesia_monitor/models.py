@@ -52,7 +52,7 @@ class Job:
     last_seen: str | None = None
     uuid: str | None = None  # database primary key, set on insert
     verdict: Verdict | None = None
-    source: str = "profesia"  # "profesia" or "linkedin"
+    source: str = field(kw_only=True)  # provider name, e.g. "profesia" or "linkedin"
 
     # serialize to a plain dict
     def to_dict(self) -> dict:
@@ -62,6 +62,8 @@ class Job:
     @classmethod
     def from_dict(cls, d: dict) -> Job:
         d = dict(d)
+        # legacy jobs.json files predate the source field; they were all scraped from Profesia
+        d.setdefault("source", "profesia")
         if d.get("salary") is not None:
             d["salary"] = Salary.from_dict(d["salary"])
         if d.get("verdict") is not None:

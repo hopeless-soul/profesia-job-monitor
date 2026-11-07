@@ -10,7 +10,7 @@ import requests
 from bs4 import BeautifulSoup
 from langchain_core.tools import tool
 
-from ..scraper import USER_AGENT
+from ..providers.profesia_sk.scraper import USER_AGENT
 
 MAX_PAGE_CHARS = 20_000  # keeps one page well inside the model's context
 

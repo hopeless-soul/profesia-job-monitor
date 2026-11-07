@@ -1,0 +1,21 @@
+# Profesia.sk source. Copy to data/configs/profesia_sk.yaml to turn the source on.
+# Filter values are documented in salvage.md.
+
+pages: 3                    # listing pages per search (20 offers per page)
+delay: 1.5                  # seconds between page requests
+count_days: 7              # only offers from the last N days; a search's own count_days overrides it
+retry:
+  attempts: 3               # tries per run, including the first
+  delay: 30                 # seconds between tries
+
+searches:
+  - keyword: c#             # free-text search
+    segments: [bratislavsky-kraj]          # region slugs: bratislavsky-kraj, zilinsky-kraj, ...
+    remote_work: 2           # 0 on-site only, 1 remote only, 2 partially remote, null any
+    min_salary: 2000         # minimum salary in EUR
+    salary_period: m         # m monthly, h hourly
+  - keyword: python
+    segments: [informacne-technologie, plny-uvazok]
+    remote_work: null
+    min_salary: null
+    salary_period: m

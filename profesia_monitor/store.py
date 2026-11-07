@@ -18,7 +18,7 @@ SCHEMA_VERSION = 1
 _OFFERS_TABLE = """
 CREATE TABLE IF NOT EXISTS {name} (
     uuid            TEXT PRIMARY KEY,
-    source          TEXT NOT NULL DEFAULT 'profesia',
+    source          TEXT NOT NULL,            -- provider name, set on every insert
     id              INTEGER NOT NULL,         -- offer ID on its source site
     title           TEXT NOT NULL,
     url             TEXT NOT NULL,
@@ -203,7 +203,7 @@ def save_verdict(conn: sqlite3.Connection, offer_uuid: str, verdict: Verdict) ->
 
 
 # Load one offer by its source and ID
-def get_job(conn: sqlite3.Connection, id: int, source: str = "profesia") -> Job | None:
+def get_job(conn: sqlite3.Connection, id: int, source: str) -> Job | None:
     row = conn.execute("SELECT * FROM offers WHERE source = ? AND id = ?", (source, id)).fetchone()
     if row is None:
         return None

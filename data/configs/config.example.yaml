@@ -1,0 +1,17 @@
+# Shared settings. Copy to data/configs/config.yaml and edit.
+# Searches and retries live in configs/profesia_sk.yaml and configs/linkedin.yaml.
+
+db: ../jobs.db                 # SQLite offer database; relative paths resolve against this folder (data/configs/)
+backstory: ../backstory.md     # your experience, read by the offer reviewer (keep it out of git); ../ is data/
+interval: 60                   # minutes between scrapes; use --once for a single run
+
+telegram:
+  token: null               # bot token from @BotFather; null uses the TELEGRAM_BOT_TOKEN env var
+  subscribers: ../subscribers.json
+
+model:
+  provider: google          # anthropic, openai or google
+  name: gemini-3.5-flash    # null uses the provider's default model
+  temperature: 0.0          # 0 gives the most consistent verdicts
+  max_tokens: 8192          # keep it high: thinking models spend part of it on reasoning
+  api_key: null             # null uses the provider's env var (GOOGLE_API_KEY, ...)

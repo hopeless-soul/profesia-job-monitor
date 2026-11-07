@@ -20,8 +20,8 @@ provider `config.py` modules.
 | File | Holds | On when |
 |---|---|---|
 | `data/config.yaml` | `db`, `backstory`, `interval`, `telegram`, `model` | always (required) |
-| `data/profesia_sk.yaml` | Profesia searches, `pages`, `count_days`, `delay`, `retry` | the file exists |
-| `data/linkedin.yaml` | LinkedIn searches, `date_posted`, `max_pages`, `delay`, `retry` | the file exists |
+| `data/configs/profesia_sk.yaml` | Profesia searches, `pages`, `count_days`, `delay`, `retry` | the file exists |
+| `data/configs/linkedin.yaml` | LinkedIn searches, `date_posted`, `max_pages`, `delay`, `retry` | the file exists |
 
 - The real files are under `data/`, which is gitignored. The examples are committed:
   `data/config.example.yaml`, `profesia_monitor/providers/profesia_sk/config.example.yaml`,

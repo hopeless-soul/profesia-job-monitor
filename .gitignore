@@ -32,7 +32,9 @@ subscribers.json
 *.db
 *.log
 data/*
-!data/config.example.json
+!data/configs/
+data/configs/*
+!data/configs/*.example.yaml
 
 # Personal candidate profile read by the offer reviewer
 backstory.md
@@ -45,3 +47,6 @@ backstory.md
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Example configs are committed wherever they are
+!*.example.yaml

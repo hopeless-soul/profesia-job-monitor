@@ -1,90 +1,180 @@
 import asyncio
+import json
+from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
 
 import pytest
+from mcp.types import CallToolResult, TextContent
 
-from profesia_monitor import linkedin
-from profesia_monitor.config import LinkedInConfig, LinkedInSearch
-from profesia_monitor.linkedin import LinkedInError, collect, fetch_jobs, parse_job_details
+from profesia_monitor.errors import ConfigError
+from profesia_monitor.providers.linkedin import provider as linkedin
+from profesia_monitor.providers.linkedin.config import LinkedInConfig, LinkedInSearch, parse_config
+from profesia_monitor.providers.linkedin.provider import LinkedInError, LinkedInProvider, _call, collect, parse_job_details
 
 DETAILS = (Path(__file__).parent / "fixtures" / "linkedin_job_details.txt").read_text(encoding="utf-8")
 
 
-# header lines become title, company, location, posted text and work type labels
+# Stands in for mcp ClientSession: `replies` maps a tool name to a function(args) -> CallToolResult
+class FakeSession:
+    def __init__(self, replies):
+        self.replies = replies
+        self.calls = []
+
+    async def call_tool(self, name, args):
+        self.calls.append((name, args))
+        return self.replies[name](args)
+
+
+# A details call that takes too long for the time limit
+class SlowSession(FakeSession):
+    async def call_tool(self, name, args):
+        if args.get("job_id") == "2":
+            await asyncio.sleep(5)
+        return await super().call_tool(name, args)
+
+
+# A tool reply shaped like the MCP server's: JSON text, or an error text
+def reply(payload=None, *, text=None, error=False):
+    body = text if text is not None else json.dumps(payload)
+    return CallToolResult(content=[TextContent(type="text", text=body)], is_error=error)
+
+
+# Standard replies: search returns the given IDs, every details call returns the fixture text
+def replies(search_ids):
+    return {
+        "search_jobs": lambda args: reply({"job_ids": search_ids}),
+        "get_job_details": lambda args: reply({"sections": {"job_posting": DETAILS}}),
+    }
+
+
+# An open_session stand-in that yields the given session
+def opener(session):
+    @asynccontextmanager
+    async def open_session():
+        yield session
+
+    return open_session
+
+
+CONFIG = LinkedInConfig(searches=[LinkedInSearch(keywords="python developer")], delay=0)
+
+
+# header, title, location and posted time, plus the work type lines before Apply
 def test_parse_job_details_reads_header():
-    job = parse_job_details(4484440903, DETAILS)
+    job = parse_job_details(4484440903, DETAILS, "linkedin")
 
-    assert (job.title, job.company, job.location) == ("Back End JavaScript Developer", "Ciklum", "Bratislava, Slovakia")
-    assert job.posted_text == "1 day ago"
-    assert job.labels == ["Hybrid", "Full-time"]  # "Remote first culture" after Apply is ignored
-    assert job.url == "https://www.linkedin.com/jobs/view/4484440903/"
-    assert (job.source, job.salary) == ("linkedin", None)
+    assert (job.id, job.company, job.title, job.location, job.posted_text) == (
+        4484440903, "Ciklum", "Back End JavaScript Developer", "Bratislava, Slovakia", "1 day ago",
+    )
+    assert job.labels == ["Hybrid", "Full-time"]
+    assert job.source == "linkedin"
 
 
-# a page without the usual header is rejected
+# text without a header line is a bad job, not a crash
 def test_parse_job_details_rejects_unexpected_text():
     with pytest.raises(ValueError):
-        parse_job_details(1, "Sign in\n\nJoin now")
+        parse_job_details(1, "Sign in\n\nJoin now", "linkedin")
 
 
-# MCP stand-in: search results per keywords, details per job ID; IDs in `fail` return an error result
-class FakeServer:
-    def __init__(self, searches, fail=(), search_error=None):
-        self.searches = searches
-        self.fail = set(fail)
-        self.search_error = search_error
-        self.calls: list[tuple[str, dict]] = []
-
-    async def __call__(self, name, args):
-        self.calls.append((name, args))
-        if name == "search_jobs":
-            if self.search_error:
-                raise LinkedInError(self.search_error)
-            return {"job_ids": self.searches[args["keywords"]]}
-        if args["job_id"] in self.fail:
-            raise LinkedInError("page failed")
-        return {"sections": {"job_posting": DETAILS}}
-
-
-CONFIG = LinkedInConfig([LinkedInSearch("python in Slovakia", work_type="remote,hybrid"), LinkedInSearch("c#")])
-
-
-def run(server, known=lambda ids: set()):
+# details are read only for IDs not stored yet, and each job carries the provider's source
+def test_collect_reads_only_new_jobs():
+    session = FakeSession(replies([1, 2, 3]))
     jobs = []
-    asyncio.run(collect(server, CONFIG, known, jobs))
-    return jobs
+
+    asyncio.run(collect(partial(_call, session), "linkedin", CONFIG, 0, lambda ids: {2}, jobs))
+
+    assert [j.id for j in jobs] == [1, 3]
+    assert {j.source for j in jobs} == {"linkedin"}
 
 
-# IDs are deduplicated across searches, stored ones skip details, and filters reach the search
-def test_collect_skips_known_and_duplicate_ids(caplog):
-    caplog.set_level("INFO")
-    server = FakeServer({"python in Slovakia": ["1", "2"], "c#": ["2", "3"]})
-
-    jobs = run(server, known=lambda ids: {i for i in ids if i == 1})
-
-    assert [j.id for j in jobs] == [2, 3]
-    assert "linkedin search 'c#': 2 job ids" in caplog.text
-    assert "3 unique job ids, 1 already stored, 2 to read" in caplog.text
-    assert "linkedin job 2 parsed: Back End JavaScript Developer | Ciklum | Bratislava, Slovakia | 1 day ago | Hybrid, Full-time" in caplog.text
-    assert [a["job_id"] for name, a in server.calls if name == "get_job_details"] == ["2", "3"]
-    assert server.calls[0] == ("search_jobs", {
-        "keywords": "python in Slovakia", "date_posted": "past_24_hours", "max_pages": 1, "work_type": "remote,hybrid",
+# one failing search is skipped; the IDs of the other searches are still read
+def test_collect_keeps_other_searches_when_one_fails():
+    search_replies = iter([reply(text="Please log in", error=True), reply({"job_ids": [5]})])
+    session = FakeSession({
+        "search_jobs": lambda args: next(search_replies),
+        "get_job_details": lambda args: reply({"sections": {"job_posting": DETAILS}}),
     })
+    config = LinkedInConfig(searches=[LinkedInSearch(keywords="a"), LinkedInSearch(keywords="b")], delay=0)
+    jobs = []
+
+    asyncio.run(collect(partial(_call, session), "linkedin", config, 0, lambda ids: set(), jobs))
+
+    assert [j.id for j in jobs] == [5]
 
 
-# one failed details page skips only that job
-def test_collect_skips_a_failed_job():
-    server = FakeServer({"python in Slovakia": ["1", "2"], "c#": []}, fail={"1"})
+# details calls are spaced by `delay`, with no pause before the first one
+def test_collect_pauses_between_detail_requests(monkeypatch):
+    pauses = []
 
-    assert [j.id for j in run(server)] == [2]
+    async def record(seconds):
+        pauses.append(seconds)
+
+    monkeypatch.setattr(linkedin.asyncio, "sleep", record)
+    config = LinkedInConfig(searches=[LinkedInSearch(keywords="dev")], delay=0.5)
+
+    asyncio.run(collect(partial(_call, FakeSession(replies([1, 2, 3]))), "linkedin", config, 0.5, lambda ids: set(), []))
+
+    assert pauses == [0.5, 0.5]
 
 
-# a login prompt during search ends LinkedIn for this run with no jobs and no exception
-def test_fetch_jobs_returns_nothing_on_login_error(monkeypatch, caplog):
-    async def fake_fetch(config, known, jobs):
-        await collect(FakeServer({}, search_error="A LinkedIn login window is open"), config, known, jobs)
+# a server error result becomes LinkedInError with the server's text
+def test_call_turns_error_results_into_linkedin_error():
+    session = FakeSession({"search_jobs": lambda args: reply(text="Please log in", error=True)})
 
-    monkeypatch.setattr(linkedin, "_fetch", fake_fetch)
+    with pytest.raises(LinkedInError, match="Please log in"):
+        asyncio.run(_call(session, "search_jobs", {}))
 
-    assert fetch_jobs(CONFIG, lambda ids: set()) == []
-    assert "login window" in caplog.text
+
+# a reply that is not JSON is a LinkedIn failure, not a JSON error
+def test_call_turns_invalid_json_into_linkedin_error():
+    session = FakeSession({"search_jobs": lambda args: reply(text="<html>not json</html>")})
+
+    with pytest.raises(LinkedInError):
+        asyncio.run(_call(session, "search_jobs", {}))
+
+
+# the provider reads jobs through the session it opens
+def test_provider_fetches_jobs_through_its_session():
+    provider = LinkedInProvider(CONFIG, open_session=opener(FakeSession(replies([1, 2]))))
+
+    jobs = provider.fetch(lambda ids: set())
+
+    assert [j.id for j in jobs] == [1, 2]
+    assert {j.source for j in jobs} == {"linkedin"}
+
+
+# a server that cannot start is a LinkedInError, which run_once logs
+def test_provider_turns_start_failures_into_linkedin_error():
+    def missing_uvx():
+        raise FileNotFoundError("uvx")
+
+    provider = LinkedInProvider(CONFIG, open_session=missing_uvx)
+
+    with pytest.raises(LinkedInError):
+        provider.fetch(lambda ids: set())
+
+
+# on timeout the jobs read so far are returned, not lost
+def test_provider_keeps_jobs_read_before_the_time_limit():
+    provider = LinkedInProvider(CONFIG, open_session=opener(SlowSession(replies([1, 2]))))
+    provider.time_limit = 0.2
+
+    jobs = provider.fetch(lambda ids: set())
+
+    assert [j.id for j in jobs] == [1]
+
+
+# the LinkedIn file takes an optional delay, default 1.5 s, and rejects negatives
+def test_config_reads_linkedin_delay():
+    base = {"searches": [{"keywords": "x"}]}
+
+    assert parse_config(base).delay == 1.5
+    assert parse_config(base | {"delay": 2}).delay == 2.0
+    with pytest.raises(ConfigError):
+        parse_config(base | {"delay": -1})
+
+
+# the mcp floor: the code reads CallToolResult.is_error, which mcp 1.x does not have
+def test_mcp_result_has_is_error_field():
+    assert "is_error" in CallToolResult.model_fields

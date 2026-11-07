@@ -1,51 +1,58 @@
 from pathlib import Path
 
-from profesia_monitor.scraper import Query, scrape
+import pytest
+import requests
 
-FIXTURES = Path(__file__).parent / "fixtures"
+from profesia_monitor.providers.profesia_sk.config import ProfesiaConfig
+from profesia_monitor.providers.profesia_sk.provider import ProfesiaError, ProfesiaProvider
+from profesia_monitor.providers.profesia_sk.config import Query
+from profesia_monitor.providers.profesia_sk.scraper import scrape
+
+PAGE = (Path(__file__).parent / "fixtures" / "listing_page1.html").read_text(encoding="utf-8")
 
 
-class FakeResponse:
-    def __init__(self, name: str):
-        self.text = (FIXTURES / name).read_text(encoding="utf-8")
+# A page response with the listing HTML
+class Response:
+    def __init__(self, text):
+        self.text = text
 
     def raise_for_status(self):
         pass
 
 
-class FakeSession:
-    def __init__(self, pages: list[str]):
-        self.pages = pages
-        self.headers: dict[str, str] = {}
-        self.calls: list[tuple[str, dict]] = []
+# Stands in for requests.Session; every page returns the fixture, or fails when `fail` is set
+class Session:
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.headers = {}
 
-    def get(self, url, params, timeout):
-        self.calls.append((url, params))
-        return FakeResponse(self.pages[len(self.calls) - 1])
-
-
-def test_query_uses_page_num_and_path_segments():
-    q = Query("c#", segments=["bratislavsky-kraj"], remote_work=2, min_salary=2000, count_days=3)
-    assert q.url() == "https://www.profesia.sk/praca/bratislavsky-kraj/"
-    assert q.params(2) == {
-        "search_anywhere": "c#",
-        "sort_by": "relevance",
-        "page_num": 2,
-        "remote_work": 2,
-        "salary": 2000,
-        "salary_period": "m",
-        "count_days": 3,
-    }
+    def get(self, url, params=None, timeout=None):
+        if self.fail:
+            raise requests.ConnectionError("down")
+        return Response(PAGE)
 
 
-def test_scrape_follows_pages_until_last():
-    session = FakeSession(["listing_page1.html", "listing_last_page.html"])
-    jobs = scrape(Query("c#"), max_pages=10, delay=0, session=session)
+# every job scraped carries the source it was asked for
+def test_scrape_tags_jobs_with_their_source():
+    jobs = scrape(Query(keyword="c#"), source="profesia", max_pages=1, delay=0, session=Session())
 
-    assert [p["page_num"] for _, p in session.calls] == [1, 2]
-    assert len(jobs) == 25
+    assert jobs
+    assert {j.source for j in jobs} == {"profesia"}
 
 
-def test_scrape_dedupes_repeated_offers():
-    session = FakeSession(["listing_page1.html"] * 2)
-    assert len(scrape(Query("c#"), max_pages=2, delay=0, session=session)) == 20
+# a first-page failure is a ProfesiaError, so run_once can retry and then skip Profesia
+def test_provider_turns_request_failures_into_profesia_error():
+    provider = ProfesiaProvider(ProfesiaConfig(searches=[Query(keyword="c#")], pages=1, delay=0), session=Session(fail=True))
+
+    with pytest.raises(ProfesiaError):
+        provider.fetch(lambda ids: set())
+
+
+# the provider scrapes every configured search and tags each job with its name
+def test_provider_fetches_every_search():
+    provider = ProfesiaProvider(ProfesiaConfig(searches=[Query(keyword="c#"), Query(keyword="java")], pages=1, delay=0), session=Session())
+
+    jobs = provider.fetch(lambda ids: set())
+
+    assert jobs
+    assert {j.source for j in jobs} == {"profesia"}

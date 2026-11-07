@@ -1,0 +1,14 @@
+# LinkedIn source through the LinkedIn MCP server. Copy to data/configs/linkedin.yaml to turn the source on.
+# Local runs only: the first run needs a console to log in. See the README's LinkedIn section.
+
+date_posted: past_24_hours  # past_hour, past_24_hours, past_week or past_month
+max_pages: 1                # result pages per search, 1 to 10
+delay: 1.5                  # seconds between job detail requests
+retry:
+  attempts: 3               # tries per run, including the first
+  delay: 30                 # seconds between tries
+
+searches:
+  - keywords: python developer in Slovakia   # put the location here; LinkedIn ignores a separate one
+    work_type: remote,hybrid                 # comma-separated: on_site, remote, hybrid
+  - keywords: c# developer in Bratislava

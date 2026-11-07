@@ -18,13 +18,13 @@ from pathlib import Path
 import requests
 
 from .models import Job
+from .providers import SOURCE_LABELS
 from .store import now_iso
 
 log = logging.getLogger(__name__)
 
 API_URL = "https://api.telegram.org/bot{token}/{method}"
 MAX_MESSAGE_LEN = 4096
-SOURCE_NAMES = {"profesia": "Profesia", "linkedin": "LinkedIn"}
 VERDICT_EMOJI = {"GO": "🟢", "STRETCH": "🟡", "SKIP": "🔴", "UNREACHABLE": "⚠️"}
 
 
@@ -152,7 +152,7 @@ def handle_updates(bot: Bot, subs: Subscribers, timeout: int = 0) -> bool:
 
 def format_job(job: Job) -> str:
     lines = [f'<b><a href="{html.escape(job.url)}">{html.escape(job.title)}</a></b>']
-    source = SOURCE_NAMES.get(job.source, job.source)
+    source = SOURCE_LABELS.get(job.source, job.source)
     details = " · ".join(html.escape(x) for x in (job.company, job.location, source) if x)
     if details:
         lines.append(details)

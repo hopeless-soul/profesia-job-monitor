@@ -1,8 +1,8 @@
 import pytest
 import requests
 
-from profesia_monitor.agents import tools
-from profesia_monitor.agents.tools import fetch_offer
+from offer_monitor.agents import tools
+from offer_monitor.agents.tools import fetch_offer
 
 
 class FakeResponse(requests.Response):

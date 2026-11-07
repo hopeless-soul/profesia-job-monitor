@@ -3,9 +3,9 @@ import json
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 
-from profesia_monitor.agents.offer_reviewer import as_tool, system_prompt
-from profesia_monitor.agents.orchestrator import build_orchestrator, evaluate
-from profesia_monitor.models import Verdict
+from offer_monitor.agents.offer_reviewer import as_tool, system_prompt
+from offer_monitor.agents.orchestrator import build_orchestrator, evaluate
+from offer_monitor.models import Verdict
 
 URL = "https://www.profesia.sk/praca/x/O1"
 VERDICT = {"tag": "GO", "content": "fits", "url": URL}

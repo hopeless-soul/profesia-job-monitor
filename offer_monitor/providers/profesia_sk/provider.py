@@ -9,13 +9,9 @@ import requests
 from ...models import Job
 from ..base import SourceProvider
 from .config import ProfesiaConfig
-from .errors import ProfesiaError
 from .scraper import scrape
 
 log = logging.getLogger(__name__)
-
-# re-exported: ProfesiaError used to be defined here
-__all__ = ["ProfesiaError", "ProfesiaProvider"]
 
 
 class ProfesiaProvider(SourceProvider):

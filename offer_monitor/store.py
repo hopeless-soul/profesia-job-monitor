@@ -134,40 +134,29 @@ def insert_jobs(conn: sqlite3.Connection, jobs: list[Job]) -> int:
     return conn.total_changes - before
 
 
-# Store a scrape: refresh known offers, insert new ones; returns the new offers to notify and review.
-# A new offer with the same title + company as a stored one (any source) or an earlier one in this
-# scrape is stored too, so it isn't fetched again, but is not returned.
-def upsert_jobs(conn: sqlite3.Connection, scraped: list[Job], seen_at: str | None = None) -> list[Job]:
-    seen_at = seen_at or now_iso()
-
-    # drop duplicates (the same offer can match several searches)
-    by_key = {(job.source, job.id): job for job in scraped}
-
-    # find which offers are already stored, per source
-    known: set[tuple[str, int]] = set()
-    for source in {s for s, _ in by_key}:
-        ids = [i for s, i in by_key if s == source]
-        known |= {(source, i) for i in known_ids(conn, source, ids)}
-
-    # refresh known offers, keeping uuid, first_seen and verdict
+# Refresh offers that are already stored, keeping uuid, first_seen and verdict; jobs not stored are untouched
+def refresh_known(conn: sqlite3.Connection, jobs: list[Job], seen_at: str) -> None:
     conn.executemany(
         f"UPDATE offers SET {', '.join(f'{c} = :{c}' for c in _REFRESH_COLUMNS)} "
         "WHERE source = :source AND id = :id",
-        [_row(job) | {"last_seen": seen_at} for key, job in by_key.items() if key in known],
+        [_row(job) | {"last_seen": seen_at} for job in jobs],
     )
 
-    # new offers; skip the ones whose title + company is already stored or taken earlier in this scrape
-    added = [job for key, job in by_key.items() if key not in known]
+
+# Insert new offers (already deduped per source and against the DB); returns the ones to notify and review.
+# An offer with the same title + company as a stored one (any source) or an earlier one in this
+# batch is stored too, so it isn't fetched again, but is not returned.
+def store_new(conn: sqlite3.Connection, new: list[Job], seen_at: str) -> list[Job]:
     taken = {_dup_key(title, company) for title, company in conn.execute("SELECT title, company FROM offers")}
     fresh = []
-    for job in added:
+    for job in new:
         job.first_seen = job.last_seen = seen_at
         key = _dup_key(job.title, job.company)
         if key is None or key not in taken:
             fresh.append(job)
             taken.add(key)
 
-    insert_jobs(conn, added)
+    insert_jobs(conn, new)
     return fresh
 
 

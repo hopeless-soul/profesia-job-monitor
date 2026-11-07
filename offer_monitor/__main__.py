@@ -1,19 +1,17 @@
-"""CLI. By default runs forever, scraping every job source once per `interval` minutes
-(default 60). Ctrl+C stops it. Sources come from profesia_sk.yaml and linkedin.yaml next to the config (data/configs/).
-
-    python -m profesia_monitor
-    python -m profesia_monitor --interval 30        # scrape every 30 min
-    python -m profesia_monitor --once               # single run, then exit
-    python -m profesia_monitor "c#" --remote 2 --once   # one-off Profesia search, ignores the config searches
-    python -m profesia_monitor --import-json jobs.json  # one-time import of the old JSON store
-
-Offers are stored in SQLite (config `db`). With a Telegram token (config
-telegram.token or TELEGRAM_BOT_TOKEN), each new offer is sent to everyone who
-sent /start to the bot. With an LLM configured (config `model`), every new
-offer then gets a verdict that is saved and added to its Telegram message.
-A `linkedin.yaml` next to the config turns LinkedIn searches on (local runs only).
-"""
-
+# CLI. By default runs forever, scraping every job source once per `interval` minutes
+# Sources come from profesia_sk.yaml and linkedin.yaml next to the config (data/configs/).
+# 
+#     python -m offer_monitor
+#     python -m offer_monitor --interval 30        # scrape every 30 min
+#     python -m offer_monitor --once               # single run, then exit
+#     python -m offer_monitor "c#" --remote 2 --once   # one-off Profesia search, ignores the config searches
+#     python -m offer_monitor --import-json jobs.json  # one-time import of the old JSON store
+# 
+# Offers are stored in SQLite (config `db`). With a Telegram token (config
+# telegram.token or TELEGRAM_BOT_TOKEN), each new offer is sent to everyone who
+# sent /start to the bot. With an LLM configured (config `model`), every new
+# offer then gets a verdict that is saved and added to its Telegram message.
+# A `linkedin.yaml` next to the config turns LinkedIn searches on (local runs only).
 from __future__ import annotations
 
 import argparse
@@ -40,104 +38,21 @@ from .store import (
     insert_jobs,
     known_ids,
     load_jobs,
+    now_iso,
+    refresh_known,
     save_message_ids,
     save_verdict,
-    upsert_jobs,
+    store_new,
 )
 from .telegram import Bot, Subscribers, TelegramAuthError, TelegramError, format_verdict, handle_updates, notify
 
-# Runtime files (config, jobs.db, subscribers, backstory) live in data/, shared with Docker's /data volume
-DEFAULT_CONFIG = Path("data/configs/config.yaml")
+# CLI parser, plus the shared default config path and console colors
+from .cli import build_parser
+from .globals import DEFAULT_CONFIG, GREY, ORANGE, RESET, YELLOW
 
-# ANSI colors for console output only (not logs); the os.system call switches on escape codes in old Windows consoles
-# 256-color codes, since the 16-color yellow looks more yellow than orange
-YELLOW, ORANGE, GREY, RESET = "\033[33m", "\033[38;5;208m", "\033[90m", "\033[0m"
-os.system("")
 
 # Background workers for verdicts, so scraping and /start replies never wait on the LLM
 VERDICTS = ThreadPoolExecutor(max_workers=2, thread_name_prefix="verdict")
-
-
-# CLI arguments
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="profesia_monitor",
-        description="Scrape Profesia.sk offers into a SQLite database.",
-    )
-    p.add_argument(
-        "keyword",
-        nargs="?",
-        help="one-off search text; when given, the config's searches are ignored",
-    )
-    p.add_argument(
-        "-c",
-        "--config",
-        type=Path,
-        default=DEFAULT_CONFIG,
-        help="config file (default: data/configs/config.yaml)",
-    )
-    p.add_argument("--db", type=Path, help="SQLite database (overrides config)")
-    p.add_argument(
-        "--pages", type=int, help="max listing pages per search (overrides config)"
-    )
-    p.add_argument(
-        "--delay", type=float, help="seconds between page requests (overrides config)"
-    )
-    p.add_argument(
-        "--days",
-        type=int,
-        metavar="N",
-        help="only offers posted in the last N days (overrides config for every search)",
-    )
-    filters = p.add_argument_group("one-off search filters (require KEYWORD)")
-    filters.add_argument(
-        "--segment",
-        action="append",
-        default=[],
-        metavar="SLUG",
-        help="path filter, repeatable, e.g. bratislavsky-kraj, plny-uvazok",
-    )
-    filters.add_argument(
-        "--remote",
-        type=int,
-        choices=[0, 1, 2],
-        help="0 on-site only, 1 remote only, 2 partially remote",
-    )
-    filters.add_argument("--min-salary", type=int, help="minimum salary in EUR")
-    filters.add_argument(
-        "--salary-period",
-        choices=["m", "h"],
-        default="m",
-        help="m = monthly, h = hourly",
-    )
-    p.add_argument(
-        "--interval",
-        type=float,
-        metavar="MINUTES",
-        help="minutes between scrapes (overrides config, default 60)",
-    )
-    p.add_argument(
-        "--once",
-        action="store_true",
-        help="scrape once and exit instead of running forever",
-    )
-    p.add_argument(
-        "--import-json",
-        type=Path,
-        metavar="FILE",
-        help="import offers from an old jobs.json into the database, then exit",
-    )
-    p.add_argument(
-        "--no-notify", action="store_true", help="don't send Telegram messages"
-    )
-    p.add_argument(
-        "--log",
-        type=Path,
-        metavar="FILE",
-        help="append all output to FILE (for scheduled runs without a console)",
-    )
-    p.add_argument("-v", "--verbose", action="store_true")
-    return p
 
 
 def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Config:
@@ -207,10 +122,6 @@ def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         config.interval = args.interval
     return config
 
-# Longest wait a source's Retry-After can buy, so one source cannot stall a run for long
-MAX_RETRY_WAIT = 300
-
-
 # Fetch one source. A retryable failure is tried again per the provider's retry policy, waiting the source's
 # Retry-After when it sent one; a failure a retry cannot fix gives up at once. None when the source gives up.
 def fetch_source(provider: SourceProvider, known: Callable[[list[int]], set[int]]) -> list[Job] | None:
@@ -227,7 +138,8 @@ def fetch_source(provider: SourceProvider, known: Callable[[list[int]], set[int]
             if attempt == attempts:
                 logging.warning("%s skipped after %d attempt(s) (%s): %s", provider.name, attempts, kind, e)
                 return None
-            wait = min(e.retry_after, MAX_RETRY_WAIT) if e.retry_after is not None else delay
+            # wait what the source asked for, or the policy's delay when it sent no Retry-After
+            wait = e.retry_after if e.retry_after is not None else delay
             logging.warning("%s attempt %d of %d failed (%s), retrying in %gs: %s", provider.name, attempt, attempts, kind, wait, e)
             time.sleep(wait)
     return None
@@ -243,20 +155,31 @@ def run_once(
 ) -> None:
     providers = build_providers(config) if providers is None else providers
 
-    # fetch every source; a failing one is retried, then logged and skipped while the others still run
-    scraped: list[Job] = []
+    # STAGE 1
+    # fetch: every source fetches and drops its own repeats; a failing one is retried, then logged
+    # and skipped while the others still run
+    fetched = []
     for provider in providers:
         with closing(connect(config.db)) as conn:
             jobs = fetch_source(provider, partial(known_ids, conn, provider.name))
         if jobs is None:
             continue
+        jobs = provider.dedup_fetched(jobs)
         print(f"{provider.name}: {len(jobs)} offers")
-        scraped.extend(jobs)
+        fetched.append((provider, jobs))
+    scraped = sum(len(jobs) for _, jobs in fetched)
 
-    # store offers; new ones get a uuid and no verdict yet, duplicates are stored but not returned
+    # STAGE 2
+    # store (one transaction): each source picks its offers not stored yet, stored ones are refreshed,
+    # then the new ones are inserted; a title + company duplicate across sources is stored but not returned
+    seen_at = now_iso()
     with closing(connect(config.db)) as conn, conn:
         before = count_jobs(conn)
-        added = upsert_jobs(conn, scraped)
+        new: list[Job] = []
+        for provider, jobs in fetched:
+            new += provider.db_dedup(jobs, partial(known_ids, conn, provider.name))
+            refresh_known(conn, jobs, seen_at)
+        added = store_new(conn, new, seen_at)
         total = count_jobs(conn)
     dups = total - before - len(added)
 
@@ -266,7 +189,7 @@ def run_once(
         print(f"{YELLOW}NEW {job.source} {job.id}  {job.title} | {job.company} | {salary}{RESET}")
     # summary line in orange, then a blank line
     print(
-        f"{ORANGE}Scraped {len(scraped)}, new {len(added)}, dup {dups}, total {total} in {config.db}{RESET}"
+        f"{ORANGE}Scraped {scraped}, new {len(added)}, dup {dups}, total {total} in {config.db}{RESET}"
     )
     print()
 
@@ -281,7 +204,8 @@ def run_once(
                 save_message_ids(conn, offer_uuid, ids)
         print(f"Notified {len(subs.chats)} Telegram subscriber(s) \n\n")
 
-    # start a verdict per new offer; on_verdict runs when each one finishes
+    # STAGE 3, 
+    # verdicts: only after every source is fetched and stored; on_verdict runs when each one finishes
     if review:
         for job in added:
             future = VERDICTS.submit(review, job.url)

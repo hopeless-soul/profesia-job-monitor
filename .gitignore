@@ -24,7 +24,6 @@ dist/
 # Secrets and local configuration
 .env
 .env.*
-!.env.example
 config.json
 
 # Runtime data written by the monitor

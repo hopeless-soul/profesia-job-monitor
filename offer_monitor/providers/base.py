@@ -60,7 +60,19 @@ class SourceProvider(ABC):
     # Retry settings used by fetch_source (called from run_once) when fetch() raises SourceProviderError
     retry: RetryPolicy = RetryPolicy()
 
-    # New offers only, each with source=self.name. `known(ids)` returns the IDs already stored.
-    # Raises SourceProviderError when the source failed for this run.
+    # Offers found this run, each with source=self.name. `known(ids)` returns the IDs already stored;
+    # a source may use it to skip costly per-offer reads. Raises SourceProviderError when the source failed for this run.
     @abstractmethod
     def fetch(self, known: Callable[[list[int]], set[int]]) -> list[Job]: ...
+
+    # Drop repeats among this run's offers (the same offer can match several searches); keeps the first copy, in order
+    def dedup_fetched(self, jobs: list[Job]) -> list[Job]:
+        first: dict[tuple[str, int], Job] = {}
+        for job in jobs:
+            first.setdefault((job.source, job.id), job)
+        return list(first.values())
+
+    # Offers not stored yet; `known(ids)` returns the IDs already stored. Runs after every source has fetched.
+    def db_dedup(self, jobs: list[Job], known: Callable[[list[int]], set[int]]) -> list[Job]:
+        stored = known([job.id for job in jobs])
+        return [job for job in jobs if job.id not in stored]

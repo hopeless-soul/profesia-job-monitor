@@ -81,7 +81,6 @@ async def collect(
     call: Call,
     source: str,
     config: LinkedInConfig,
-    delay: float,
     known: Callable[[list[int]], set[int]],
     jobs: list[Job],
 ) -> None:
@@ -108,7 +107,7 @@ async def collect(
     for n, job_id in enumerate(todo):
         # pause between detail requests so the logged-in browser isn't hit in a burst
         if n:
-            await asyncio.sleep(delay)
+            await asyncio.sleep(config.delay)
         try:
             result = await call("get_job_details", {"job_id": str(job_id)})
             job = parse_job_details(job_id, result["sections"]["job_posting"], source)
@@ -178,4 +177,4 @@ class LinkedInProvider(SourceProvider):
     # Open the session, then collect
     async def _run(self, known: Callable[[list[int]], set[int]], jobs: list[Job]) -> None:
         async with self.open_session() as session:
-            await collect(partial(_call, session), self.name, self.config, self.config.delay, known, jobs)
+            await collect(partial(_call, session), self.name, self.config, known, jobs)

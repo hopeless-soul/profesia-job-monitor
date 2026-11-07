@@ -3,14 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from profesia_monitor.__main__ import build_parser, resolve_config
-from profesia_monitor.config import load_config, parse_config as parse_main
-from profesia_monitor.errors import ConfigError
-from profesia_monitor.providers.linkedin.config import LinkedInConfig, LinkedInSearch, load_config as load_linkedin, parse_config as parse_linkedin
-from profesia_monitor.providers.profesia_sk.config import Query, load_config as load_profesia, parse_config as parse_profesia
+from offer_monitor.__main__ import resolve_config
+from offer_monitor.cli import build_parser
+from offer_monitor.config import load_config, parse_config as parse_main
+from offer_monitor.errors import ConfigError
+from offer_monitor.providers.linkedin.config import LinkedInConfig, LinkedInSearch, load_config as load_linkedin, parse_config as parse_linkedin
+from offer_monitor.providers.profesia_sk.config import Query, load_config as load_profesia, parse_config as parse_profesia
 
 ROOT = Path(__file__).parents[1]
-PKG = ROOT / "profesia_monitor" / "providers"
 
 
 # the main example config is valid, and a run without provider files has both sources off
@@ -53,20 +53,17 @@ def test_count_days_default_and_override():
     assert [q.count_days for q in config.searches] == [3, 7, None]
 
 
-# errors name the file, the field path and the problem
-def test_invalid_config_names_the_field():
-    with pytest.raises(ConfigError, match=r"profesia_sk.yaml: searches\[0\].remote_work: Input should be 0, 1 or 2"):
-        parse_profesia({"searches": [{"keyword": "c#", "remote_work": 5}]})
-
-
-# each value rule is enforced: zero pages, a bad slug, a blank keyword
-def test_value_rules_are_enforced():
-    with pytest.raises(ConfigError, match="pages"):
-        parse_profesia({"pages": 0, "searches": [{"keyword": "a"}]})
-    with pytest.raises(ConfigError, match=r"searches\[0\].segments"):
-        parse_profesia({"searches": [{"keyword": "a", "segments": ["Bad Slug"]}]})
-    with pytest.raises(ConfigError, match=r"searches\[0\].keyword"):
-        parse_profesia({"searches": [{"keyword": "   "}]})
+# the Profesia file: errors name the file, the field path and the problem for each value rule
+def test_profesia_file_rejects_bad_values():
+    bad = [
+        ({"searches": [{"keyword": "c#", "remote_work": 5}]}, r"profesia_sk.yaml: searches\[0\].remote_work: Input should be 0, 1 or 2"),
+        ({"pages": 0, "searches": [{"keyword": "a"}]}, "pages"),
+        ({"searches": [{"keyword": "a", "segments": ["Bad Slug"]}]}, r"searches\[0\].segments"),
+        ({"searches": [{"keyword": "   "}]}, r"searches\[0\].keyword"),
+    ]
+    for data, message in bad:
+        with pytest.raises(ConfigError, match=message):
+            parse_profesia(data)
 
 
 # CLI flags win over the provider files
@@ -109,6 +106,7 @@ def test_linkedin_file():
         ({"searches": [{"keywords": "a", "work_type": "remote,office"}]}, r"searches\[0\].work_type"),
         ({"searches": [{"keywords": "a"}], "date_posted": "today"}, "date_posted"),
         ({"searches": [{"keywords": "a"}], "max_pages": 11}, "max_pages"),
+        ({"searches": [{"keywords": "a"}], "delay": -1}, "delay"),
         ({"searches": [{"keywords": "a"}], "location": "SK"}, "location"),
     ]
     for data, message in bad:

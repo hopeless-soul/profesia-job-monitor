@@ -1,4 +1,4 @@
-# Load data/config.yaml: the shared settings. Each job source has its own file next to it
+# Load data/configs/config.yaml: the shared settings. Each job source has its own file next to it
 # (profesia_sk.yaml, linkedin.yaml); a source is on when its file exists.
 
 from pathlib import Path
@@ -42,7 +42,6 @@ class ModelConfig(BaseModel):
         return value or None
 
 
-# All settings for one run: the shared file, plus the provider configs when their files exist
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

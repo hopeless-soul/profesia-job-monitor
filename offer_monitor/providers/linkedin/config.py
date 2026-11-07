@@ -1,4 +1,4 @@
-# LinkedIn source config, read from data/linkedin.yaml. See config.example.yaml next to this file.
+# LinkedIn source config, read from data/configs/linkedin.yaml. See linkedin.example.yaml there.
 
 from pathlib import Path
 from typing import Literal

@@ -10,8 +10,7 @@ import requests
 from bs4 import BeautifulSoup
 from langchain_core.tools import tool
 
-from ..http import retry_after_seconds
-from ..providers.profesia_sk.scraper import USER_AGENT
+from ..http import USER_AGENT, retry_after_seconds
 
 MAX_PAGE_CHARS = 20_000  # keeps one page well inside the model's context
 

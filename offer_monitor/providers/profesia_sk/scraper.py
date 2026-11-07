@@ -1,4 +1,4 @@
-# Fetch Profesia.sk listing pages. See salvage.md for URL structure and filters.
+# Fetch Profesia.sk listing pages; the URL and filters come from Query in config.py.
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import time
 
 import requests
 
-from ...http import retry_after_seconds
+from ...http import USER_AGENT, retry_after_seconds
 from ...models import Job
 from ..base import SourceProviderError
 from .config import Query
@@ -15,11 +15,6 @@ from .errors import ProfesiaBlockedError, ProfesiaError, ProfesiaRateLimitedErro
 from .parser import parse_listing
 
 log = logging.getLogger(__name__)
-
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
 
 
 # One listing page, or a typed error for the cause: no answer, rate limited, refused, or another HTTP error

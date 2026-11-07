@@ -1,5 +1,5 @@
 # Profesia.sk source. Copy to data/configs/profesia_sk.yaml to turn the source on.
-# Filter values are documented in salvage.md.
+# Filter values are documented in the README's "Search filters" section.
 
 pages: 3                    # listing pages per search (20 offers per page)
 delay: 1.5                  # seconds between page requests

@@ -10,8 +10,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # application code, including agents/prompts
-COPY profesia_monitor/ profesia_monitor/
+COPY offer_monitor/ offer_monitor/
 
 # configs/ (config.yaml and the provider files), jobs.db, subscribers.json and agent_context/ (backstory.md, projects/) live in the mounted volume
 VOLUME /data
-CMD ["python", "-m", "profesia_monitor", "-c", "/data/configs/config.yaml", "-v"]
+CMD ["python", "-m", "offer_monitor", "-c", "/data/configs/config.yaml", "-v"]

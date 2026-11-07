@@ -34,7 +34,7 @@ Profesia needs no browser: its listing pages are server-rendered HTML, so scrapi
 | LinkedIn (optional) | `mcp` ≥ 2.0 client for [`mcp-server-linkedin`](https://github.com/stickerdaniel/linkedin-mcp-server), started with `uvx` |
 | Notifications | Telegram Bot API, long polling (no webhook or public server) |
 | Containers | Docker + Docker Compose, [sqlite-web](https://github.com/coleifer/sqlite-web) viewer |
-| Tests | `pytest` ≥ 8, `jsonschema` ≥ 4.20 |
+| Tests | `pytest` ≥ 8 |
 
 ## Getting started
 
@@ -97,7 +97,7 @@ For the Anthropic or OpenAI provider, also run `pip install langchain-anthropic`
 cp data/configs/config.example.yaml data/configs/config.yaml      # PowerShell: Copy-Item data\configs\config.example.yaml data\configs\config.yaml
 ```
 
-Copy the provider examples you want, then edit them. VS Code autocompletes each file from its schema:
+Copy the provider examples you want, then edit them:
 
 ```bash
 cp data/configs/profesia_sk.example.yaml data/configs/profesia_sk.yaml   # Profesia.sk searches
@@ -124,7 +124,7 @@ Optionally, put one markdown file per pet project in `data/agent_context/project
 **4. Import old offers (only when upgrading from a `jobs.json` version)**
 
 ```bash
-python -m profesia_monitor --import-json jobs.json
+python -m offer_monitor --import-json jobs.json
 ```
 
 Do this **before the first run**. Otherwise every offer already in your archive is sent to subscribers as new. Imported offers keep their timestamps and get no verdicts. Running it twice is safe.
@@ -132,7 +132,7 @@ Do this **before the first run**. Otherwise every offer already in your archive 
 **5. Test run without Telegram**
 
 ```bash
-python -m profesia_monitor --once --no-notify -v
+python -m offer_monitor --once --no-notify -v
 ```
 
 Expected output:
@@ -150,7 +150,7 @@ If you see `WARNING verdicts disabled: …`, check [Troubleshooting](#troublesho
 **6. Start monitoring**
 
 ```bash
-python -m profesia_monitor
+python -m offer_monitor
 ```
 
 ```
@@ -159,7 +159,7 @@ Running: scraping every 60 min, 1 Telegram subscriber(s), verdicts on. Ctrl+C to
 
 It scrapes now and then every `interval` minutes. Send `/start` to your bot in Telegram to subscribe. Ctrl+C stops it.
 
-On Windows you can double-click **`run-monitor.bat`** instead. It runs the same thing **locally** with the `.venv` Python (`python -m profesia_monitor -v`); it does **not** start Docker. Before starting, it checks that:
+On Windows you can double-click **`run-monitor.bat`** instead. It runs the same thing **locally** with the `.venv` Python (`python -m offer_monitor -v`); it does **not** start Docker. Before starting, it checks that:
 
 - `.venv` exists (otherwise it prints the install commands)
 - `data\configs\config.yaml` exists (otherwise it tells you to copy `data\configs\config.example.yaml`)
@@ -169,7 +169,7 @@ To run in the background on Windows:
 
 ```powershell
 Start-Process .venv\Scripts\pythonw.exe `
-  -ArgumentList "-m profesia_monitor --log monitor.log" `
+  -ArgumentList "-m offer_monitor --log monitor.log" `
   -WorkingDirectory $PWD
 ```
 
@@ -179,7 +179,7 @@ Start-Process .venv\Scripts\pythonw.exe `
 
 ```bash
 cp jobs.json data/
-docker compose run --rm --no-deps monitor python -m profesia_monitor -c /data/configs/config.yaml --import-json /data/jobs.json
+docker compose run --rm --no-deps monitor python -m offer_monitor -c /data/configs/config.yaml --import-json /data/jobs.json
 ```
 
 **2. Secrets (optional).** Put the bot token and API key in `data/configs/config.yaml` (`telegram.token`, `model.api_key`). If they're `null` there, the monitor reads `TELEGRAM_BOT_TOKEN` and the provider's variable (e.g. `GOOGLE_API_KEY`) from the environment.
@@ -194,7 +194,7 @@ This is the only way to start the Docker version; `run-monitor.bat` always runs 
 
 | Service | What it does |
 |---|---|
-| `monitor` | Runs `python -m profesia_monitor -c /data/configs/config.yaml -v`, restarting unless stopped |
+| `monitor` | Runs `python -m offer_monitor -c /data/configs/config.yaml -v`, restarting unless stopped |
 | `viewer` | sqlite-web at http://localhost:8080 for browsing `jobs.db`. It listens on localhost only and **can edit** the database. |
 
 Everyday commands:
@@ -203,7 +203,7 @@ Everyday commands:
 docker compose logs -f monitor        # follow output
 docker compose stop monitor           # pause monitoring
 docker compose down                   # stop everything
-docker compose run --rm --no-deps monitor python -m profesia_monitor -c /data/configs/config.yaml --once -v   # single run
+docker compose run --rm --no-deps monitor python -m offer_monitor -c /data/configs/config.yaml --once -v   # single run
 ```
 
 > **Run either locally or in Docker, not both.** They share `data/`, so running both would scrape and notify every offer twice.
@@ -292,7 +292,7 @@ With `data/configs/linkedin.yaml`, every run also searches LinkedIn through the 
 Setup:
 
 1. Install [uv](https://docs.astral.sh/uv/). The monitor starts the server with `uvx mcp-server-linkedin@latest`.
-2. Do the first run from a console: `python -m profesia_monitor --once`. The server downloads its Chromium in the background (LinkedIn is skipped with a warning until it's ready), then opens a login window. Sign in there, including any captcha or two-factor check. The session is saved for later runs.
+2. Do the first run from a console: `python -m offer_monitor --once`. The server downloads its Chromium in the background (LinkedIn is skipped with a warning until it's ready), then opens a login window. Sign in there, including any captcha or two-factor check. The session is saved for later runs.
 3. When the session expires, LinkedIn is skipped with a `linkedin skipped: …` warning and a login window opens again.
 
 Limits:
@@ -306,7 +306,7 @@ Limits:
 
 | Option | Meaning |
 |---|---|
-| `KEYWORD` | One-off Profesia search that ignores the config's searches (and LinkedIn), e.g. `python -m profesia_monitor "c#" --remote 2 --once` |
+| `KEYWORD` | One-off Profesia search that ignores the config's searches (and LinkedIn), e.g. `python -m offer_monitor "c#" --remote 2 --once` |
 | `--segment SLUG`, `--remote N`, `--min-salary N`, `--salary-period m\|h` | Filters for a one-off `KEYWORD` search |
 | `--once` | Scrape once, wait for verdicts, exit |
 | `--interval MINUTES` | Minutes between scrapes |
@@ -336,7 +336,7 @@ flowchart LR
 ```
 
 1. **Scrape.** Every `interval` minutes, each search's listing pages are fetched and parsed. With `linkedin` set, LinkedIn searches run next; only job pages not stored yet are opened.
-2. **Store.** Offers are upserted by `(source, id)`. Known offers get refreshed fields and `last_seen`; new ones get a UUID. A new offer whose title + company (case and spacing ignored) matches a stored offer from any source, or an earlier one in the same scrape, is stored but skips steps 3 and 4.
+2. **Store.** Each source first drops its own repeats (`dedup_fetched`); after all sources finish, each picks its offers not stored yet (`db_dedup`), all in one transaction. Known offers get refreshed fields and `last_seen`; new ones get a UUID. A new offer whose title + company (case and spacing ignored) matches a stored offer from any source, or an earlier one in the same scrape, is stored but skips steps 3 and 4.
 3. **Notify.** Each new offer goes to every subscriber as its own message, about one per second per chat. The message IDs are saved.
 4. **Review.** In a background thread, the `orchestrator` agent receives the offer URL and calls the `offer_reviewer` subagent. The reviewer fetches the posting, rates every must-have against your backstory (✅ / 🟡 / ❌), and returns `{tag, content, url}`.
 5. **Callback.** The verdict is saved, each subscriber's message is edited to add the tag and an expandable report, and `verdict <tag> for offer <id> (uuid …)` is logged.
@@ -352,15 +352,17 @@ A review costs about 4 LLM calls. Scraping and `/start` replies never wait on it
 
 ### Agents
 
-The agents' instructions are markdown files in [`profesia_monitor/agents/prompts/`](profesia_monitor/agents/prompts/): `orchestrator.md`, `offer_reviewer.md` (steps, rating thresholds, report format) and `offer_research.md` (how far to research). Edit them to change how offers are judged. The reviewer's prompt is these files plus your `backstory.md`.
+The agents' instructions are markdown files in [`offer_monitor/agents/prompts/`](offer_monitor/agents/prompts/): `orchestrator.md`, `offer_reviewer.md` (steps, rating thresholds, report format) and `offer_research.md` (how far to research). Edit them to change how offers are judged. The reviewer's prompt is these files plus your `backstory.md`.
 
 To add a subagent, create `agents/<name>.py` with `build_<name>(llm)` and an `as_tool` wrapper, write `prompts/<name>.md`, and add the tool to the orchestrator in `agents/orchestrator.py`.
 
 ## Project structure
 
 ```
-profesia_monitor/
-├── __main__.py           CLI, main loop, run_once with per-source retries
+offer_monitor/
+├── __main__.py           Main loop, run_once with per-source retries
+├── cli.py                CLI arguments
+├── globals.py            Default config path and console colors
 ├── config.py             Main config (config.yaml) and loading the provider files
 ├── errors.py             ConfigError
 ├── settings.py           RetryPolicy and YAML loading (shared by all configs)
@@ -374,7 +376,7 @@ profesia_monitor/
 │   ├── profesia_sk/      Profesia.sk source
 │   │   ├── config.py     profesia_sk.yaml: searches, pages, delay, retry
 │   │   ├── errors.py     typed Profesia errors, one per cause
-    Query builder, HTTP fetching, pagination
+│   │   ├── scraper.py    HTTP fetching, pagination
 │   │   ├── parser.py     HTML parsing (no network)
 │   │   └── provider.py   ProfesiaProvider
 │   └── linkedin/         LinkedIn source via the LinkedIn MCP server
@@ -405,11 +407,10 @@ Design notes:
 | Symptom | Fix |
 |---|---|
 | `data/configs/config.yaml not found` | Do [step 2](#option-a-run-locally), or pass `-c FILE` |
-| `config: unknown keys ['out']` | Your config predates SQLite: rename `"out": "jobs.json"` to `"db": "jobs.db"` |
 | `verdicts disabled: …` | The message names the cause: the provider package isn't installed, the API key is missing, or `backstory.md` isn't at the `backstory` path |
 | `profesia skipped after N attempt(s) (ProfesiaUnavailableError)` | Profesia could not be reached in any try. Check the connection; the next run tries again |
 | `profesia failed (ProfesiaBlockedError), not retrying` | Profesia refused the requests (401/403). The source is skipped this run; wait before running again |
-| `profesia failed (ProfesiaRateLimitedError)` | Profesia asked to slow down; the monitor waits its Retry-After (capped at 5 minutes) and tries again |
+| `profesia failed (ProfesiaRateLimitedError)` | Profesia asked to slow down; the monitor waits its Retry-After and tries again |
 | `profesia failed (ProfesiaLayoutError)` | Profesia changed its listing markup, so the parser finds no offers. The parser needs an update |
 | `linkedin failed (LinkedInAuthError), not retrying` | LinkedIn needs a login or a verification. Run once from a console and sign in, as in the LinkedIn section |
 | `linkedin skipped after N attempt(s) (LinkedInUnavailableError)` | The LinkedIn server did not start or stopped responding. Check `uv` is installed, then run again |
@@ -433,18 +434,21 @@ Tests run offline against HTML fixtures in `tests/fixtures/` and a scripted fake
 
 | Test file | Covers |
 |---|---|
-| `test_parser.py` | Card parsing, salary extraction, edge cases |
-| `test_scraper.py` | Query URLs, pagination |
-| `test_store.py` | SQLite upsert, deduplication, legacy JSON import |
+| `test_parser.py` | Listing parsing, layout-change detection |
+| `test_scraper.py` | HTTP errors per cause, pagination, Profesia provider |
+| `test_linkedin.py` | LinkedIn job parsing, MCP calls, error classes, time limit |
+| `test_sources.py` | Provider registry, dedup, retry settings |
+| `test_store.py` | SQLite upsert, deduplication, legacy JSON import, migration |
 | `test_config.py` | Config validation, path resolution, error messages |
 | `test_telegram.py` | Bot commands, subscribers, per-offer messages, verdict formatting |
 | `test_agents.py` | Orchestrator → offer_reviewer delegation, structured verdicts, prompts |
-| `test_main.py` | Verdict callback: save, message edits, failure handling |
+| `test_tools.py` | `fetch_offer` retries and Retry-After |
+| `test_main.py` | run_once across sources, retries, verdict callback |
 
 ### Conventions
 
 - `master` is the main branch; features go in their own branches (e.g. `AI-integration`) and merge back.
-- Every function, step and larger block gets a short `#` comment above it. Use `#` comments, not docstrings; only `__main__.py` keeps a module docstring as CLI help.
+- Every function, step and larger block gets a short `#` comment above it. Use `#` comments, not docstrings.
 - Type hints everywhere, with `from __future__ import annotations`; dataclasses for data.
 - Input is validated at the edges (`config.py`, CLI flags); internal code trusts it.
 - New behavior comes with a test that runs offline.

@@ -1,4 +1,4 @@
-# Profesia.sk source config, read from data/profesia_sk.yaml. See config.example.yaml next to this file.
+# Profesia.sk source config, read from data/configs/profesia_sk.yaml. See profesia_sk.example.yaml there.
 
 import re
 from pathlib import Path

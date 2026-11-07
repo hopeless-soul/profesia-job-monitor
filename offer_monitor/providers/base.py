@@ -1,13 +1,13 @@
-# Base class for job sources (Profesia.sk, LinkedIn, ...) and the errors they raise. Imports no provider, so providers can import it.
-
 from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import ClassVar
-
 from ..models import Job
 from ..settings import RetryPolicy
+
+"""
+Section: Base errors
+"""
 
 
 class SourceProviderError(RuntimeError):
@@ -54,6 +54,9 @@ class SourceAuthError(SourceProviderError):
 class SourceLayoutError(SourceProviderError):
     retryable = False
 
+"""
+Section: Base Class
+"""
 
 class SourceProvider(ABC):
     """

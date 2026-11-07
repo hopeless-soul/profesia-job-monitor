@@ -354,7 +354,7 @@ offer_monitor/
 ├── store.py              SQLite store
 ├── telegram.py           Bot API client, subscribers, message formatting
 ├── providers/
-│   ├── __init__.py       Registry: build_providers(config), source labels
+│   ├── __init__.py       Registry: build_providers(names, folder), source labels
 │   ├── base.py           SourceProvider base class and SourceProviderError
 │   ├── profesia_sk/      Profesia.sk source
 │   │   ├── config.py     profesia_sk.yaml: searches, pages, delay, retry

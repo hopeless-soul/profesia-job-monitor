@@ -1,10 +1,9 @@
 import pytest
 
-from offer_monitor.config import Config
 from offer_monitor.errors import ConfigError
 from offer_monitor.models import Job
 from offer_monitor.providers import build_providers
-from offer_monitor.providers.linkedin import LinkedInConfig, LinkedInProvider, LinkedInSearch
+from offer_monitor.providers.linkedin import LinkedInProvider
 from offer_monitor.providers.linkedin.config import parse_config as parse_linkedin
 from offer_monitor.providers.linkedin.errors import LinkedInAuthError
 from offer_monitor.providers.profesia_sk import ProfesiaConfig, ProfesiaProvider
@@ -15,13 +14,21 @@ from offer_monitor.settings import RetryPolicy
 PROFESIA = ProfesiaConfig(searches=[Query(keyword="c#")])
 
 
-# no source without its config; Profesia alone, or both in order when LinkedIn is loaded too
-def test_build_providers_adds_each_source_when_its_config_is_loaded():
-    linkedin = LinkedInConfig(searches=[LinkedInSearch(keywords="dev")])
+# only the listed providers are built, in list order, each from its own file; an unlisted file is ignored
+def test_build_providers_builds_listed_sources_in_order(tmp_path):
+    (tmp_path / "profesia_sk.yaml").write_text("searches:\n  - keyword: c#\n", encoding="utf-8")
+    (tmp_path / "linkedin.yaml").write_text("searches:\n  - keywords: dev\n", encoding="utf-8")
 
-    assert build_providers(Config()) == []
-    assert [type(p) for p in build_providers(Config(profesia=PROFESIA))] == [ProfesiaProvider]
-    assert [type(p) for p in build_providers(Config(profesia=PROFESIA, linkedin=linkedin))] == [ProfesiaProvider, LinkedInProvider]
+    assert build_providers([], tmp_path) == []
+    [profesia] = build_providers(["profesia"], tmp_path)
+    assert type(profesia) is ProfesiaProvider and [q.keyword for q in profesia.config.searches] == ["c#"]
+    assert [type(p) for p in build_providers(["linkedin", "profesia"], tmp_path)] == [LinkedInProvider, ProfesiaProvider]
+
+
+# a listed provider without its file is an error that names the file
+def test_build_providers_missing_file(tmp_path):
+    with pytest.raises(ConfigError, match="providers lists 'linkedin', but .*linkedin.yaml is missing"):
+        build_providers(["linkedin"], tmp_path)
 
 
 # dedup_fetched keeps the first copy of a repeated (source, id), in order; the same id on another source stays

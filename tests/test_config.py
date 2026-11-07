@@ -11,10 +11,9 @@ from offer_monitor.providers.profesia_sk.config import Query, load_config as loa
 ROOT = Path(__file__).parents[1]
 
 
-# the main example config is valid and runs only the Profesia source it lists
+# the main example config is valid and lists only the Profesia source
 def test_main_example_loads(tmp_path):
     shutil.copy(ROOT / "data" / "configs" / "config.example.yaml", tmp_path / "config.yaml")
-    shutil.copy(ROOT / "data" / "configs" / "profesia_sk.example.yaml", tmp_path / "profesia_sk.yaml")
 
     config = load_config(tmp_path / "config.yaml")
 
@@ -22,8 +21,6 @@ def test_main_example_loads(tmp_path):
     assert config.db.resolve() == (tmp_path / ".." / "jobs.db").resolve()
     assert config.backstory.resolve() == (tmp_path / ".." / "agent_context" / "backstory.md").resolve()
     assert config.providers == ["profesia"]
-    assert config.profesia is not None
-    assert config.linkedin is None
     assert config.model.api_key is None
 
 
@@ -36,28 +33,18 @@ def test_provider_examples_load():
     assert linkedin.searches[0] == LinkedInSearch(keywords="python developer in Slovakia", work_type="remote,hybrid")
 
 
-# only the providers in the list are loaded; a provider file that isn't listed is ignored
-def test_only_listed_providers_are_loaded(tmp_path):
-    (tmp_path / "config.yaml").write_text("providers: [profesia]\n", encoding="utf-8")
-    (tmp_path / "profesia_sk.yaml").write_text("searches:\n  - keyword: c#\n", encoding="utf-8")
-    (tmp_path / "linkedin.yaml").write_text("searches:\n  - keywords: x\n", encoding="utf-8")
-
-    config = load_config(tmp_path / "config.yaml")
-
-    assert [q.keyword for q in config.profesia.searches] == ["c#"]
-    assert config.linkedin is None
-
-
-# the list is required, holds known names only, and every listed provider needs its file
-def test_providers_list_errors(tmp_path):
+# the list is required and holds known names only
+def test_providers_list_errors():
     with pytest.raises(ConfigError, match="config.yaml: providers: list the sources to run"):
         parse_main({})
     with pytest.raises(ConfigError, match=r"providers\[0\]"):
         parse_main({"providers": ["indeed"]})
 
-    (tmp_path / "config.yaml").write_text("providers: [linkedin]\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match="providers lists 'linkedin', but .*linkedin.yaml is missing"):
-        load_config(tmp_path / "config.yaml")
+
+# provider settings belong in the provider's own file; an inline block in config.yaml is rejected
+def test_inline_provider_block_is_rejected():
+    with pytest.raises(ConfigError, match="profesia"):
+        parse_main({"providers": [], "profesia": {"searches": [{"keyword": "c#"}]}})
 
 
 # top-level count_days is inherited by searches that don't set their own; an explicit null stays null
@@ -85,12 +72,6 @@ def test_model_api_key():
     assert parse_main({"providers": [], "model": {"api_key": ""}}).model.api_key is None
     with pytest.raises(ConfigError, match="model.api_key"):
         parse_main({"providers": [], "model": {"api_key": 1}})
-
-
-# source settings left in config.yaml get a message that says where they moved
-def test_source_keys_in_main_config_are_rejected():
-    with pytest.raises(ConfigError, match="moved out of this file"):
-        parse_main({"searches": [{"keyword": "c#"}]})
 
 
 # the LinkedIn file: defaults fill in, and bad values or unknown keys name the field

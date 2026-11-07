@@ -58,12 +58,13 @@ VERDICTS = ThreadPoolExecutor(max_workers=2, thread_name_prefix="verdict")
 # The config file, relative to the working directory
 CONFIG_PATH = Path("data/configs/config.yaml")
 
-# Load config file
-def read_config(parser: argparse.ArgumentParser) -> Config:
+# Load config file and build the providers it lists (each reads its own file next to it)
+def read_config(parser: argparse.ArgumentParser) -> tuple[Config, list[SourceProvider]]:
     if not CONFIG_PATH.exists():
         parser.error(f"{CONFIG_PATH} not found; copy config.example.yaml in that folder to config.yaml")
     try:
-        return load_config(CONFIG_PATH)
+        config = load_config(CONFIG_PATH)
+        return config, build_providers(config.providers, CONFIG_PATH.parent)
     except ConfigError as e:
         parser.error(str(e))
 
@@ -115,10 +116,9 @@ def run_once(
     bot: Bot | None,
     subs: Subscribers | None,
     review: Callable[[str], Verdict] | None = None,
-    providers: list[SourceProvider] | None = None,
+    *,
+    providers: list[SourceProvider],
 ):
-    providers = build_providers(config) if providers is None else providers
-
     # STAGE 1
     # fetch: every source fetches and drops its own repeats; a failing one is retried, then logged
     # and skipped while the others still run
@@ -254,8 +254,8 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
 
-    # Load config
-    config = read_config(parser)
+    # Load config and the providers it lists
+    config, providers = read_config(parser)
 
     # Bot setup
     bot = subs = None
@@ -277,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("Telegram rejected the bot token")
             except TelegramError as e:
                 logging.warning("subscriber sync skipped: %s", e)
-        run_once(config, bot, subs, review)
+        run_once(config, bot, subs, review, providers=providers)
         # wait for pending verdicts before exiting
         VERDICTS.shutdown(wait=True)
         return 0
@@ -291,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         else ", Telegram: OFF"
     )
     verdict_note = "\nVerdicts: ON" if review else "\nVerdicts: OFF"
-    linkedin_note = "\nLinkedIn: ON" if config.linkedin else ""
+    linkedin_note = "\nLinkedIn: ON" if "linkedin" in config.providers else ""
     print(
         f"Running: scraping every {config.interval:g} min. Ctrl+C to stop.{bot_note}{verdict_note}{linkedin_note}\n"
     )
@@ -300,7 +300,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 if time.monotonic() >= next_run:
                     next_run = time.monotonic() + interval
-                    run_once(config, bot, subs, review)
+                    run_once(config, bot, subs, review, providers=providers)
                 wait = max(0, int(next_run - time.monotonic()))
                 if bot and subs:
                     # Long-poll so /start and /stop get answered right away between scrapes.

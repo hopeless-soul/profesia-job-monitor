@@ -1,6 +1,4 @@
-import json
 import sqlite3
-from dataclasses import replace
 from pathlib import Path
 
 from offer_monitor.models import Job, Verdict
@@ -9,9 +7,7 @@ from offer_monitor.store import (
     connect,
     count_jobs,
     get_job,
-    insert_jobs,
     known_ids,
-    load_jobs,
     refresh_known,
     save_verdict,
     store_new,
@@ -55,21 +51,16 @@ def test_store_new_sets_uuid_and_first_seen(tmp_path):
     assert count_jobs(conn) == 2
 
 
-# a legacy jobs.json (no source field back then) imports as Profesia offers with their timestamps
-# and fresh UUIDs, and re-importing adds nothing
-def test_import_legacy_json_round_trips(tmp_path):
-    jobs = [replace(j, first_seen=T1, last_seen=T2) for j in parse_listing(PAGE, "profesia")[0]]
-    rows = [{k: v for k, v in j.to_dict().items() if k not in ("uuid", "verdict", "source")} for j in jobs]
-    legacy = tmp_path / "jobs.json"
-    legacy.write_text(json.dumps({"schema_version": 1, "updated_at": T2, "jobs": rows}), encoding="utf-8")
+# parsed offers come back from the database unchanged, salary and labels included
+def test_offers_round_trip_through_the_db(tmp_path):
+    jobs = parse_listing(PAGE, "profesia")[0]
     conn = connect(tmp_path / "jobs.db")
 
-    assert insert_jobs(conn, load_jobs(legacy)) == len(jobs)
-    assert insert_jobs(conn, load_jobs(legacy)) == 0
+    store_new(conn, jobs, seen_at=T1)
+
+    assert any(j.salary for j in jobs) and any(j.labels for j in jobs)
     for original in jobs:
-        stored = get_job(conn, original.id, "profesia")
-        assert stored.uuid
-        assert replace(stored, uuid=None) == original
+        assert get_job(conn, original.id, "profesia") == original
 
 
 # the same ID on two sources is two offers

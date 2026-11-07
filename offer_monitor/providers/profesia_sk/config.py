@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ...settings import SourceSettings, read_yaml, validate_file
 from .parser import BASE_URL
 
-# File name next to the main config; the source is off when the file is missing
+# File name next to the main config; read when the main config's `providers` lists "profesia"
 CONFIG_FILE = "profesia_sk.yaml"
 
 _SLUG_RE = re.compile(r"^[a-z0-9-]+$")

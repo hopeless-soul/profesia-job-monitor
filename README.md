@@ -50,7 +50,7 @@ Without a bot token the monitor only prints new offers. Without an API key or ba
 
 ### The `data/` folder
 
-Every runtime file lives in `data/`. It's git-ignored, and Docker mounts it as `/data`, so local runs and the container share the same files:
+Every runtime file lives in `data/`. It's git-ignored, and Docker mounts it as `/app/data`, so local runs and the container share the same files:
 
 ```
 data/
@@ -104,6 +104,7 @@ cp data/configs/profesia_sk.example.yaml data/configs/profesia_sk.yaml   # Profe
 cp data/configs/linkedin.example.yaml data/configs/linkedin.yaml         # LinkedIn searches (optional)
 ```
 
+- in `config.yaml`, list the sources to run in `providers`, e.g. `[profesia]` or `[profesia, linkedin]`
 - in `profesia_sk.yaml`, edit `searches` (see [Search filters](#search-filters))
 - set `telegram.token` in `config.yaml` to your bot token, or leave it `null` and use `TELEGRAM_BOT_TOKEN`
 - set `model.api_key`, or leave it `null` and use the provider's env var
@@ -121,15 +122,7 @@ Save your experience as markdown in `data/agent_context/backstory.md`: roles, st
 
 Optionally, put one markdown file per pet project in `data/agent_context/projects/` (the `projects` folder next to `backstory.md`). Every `*.md` there is appended to the backstory under a `## Pet project: <file name>` header, and the reviewer counts it as evidence, marked as a personal project.
 
-**4. Import old offers (only when upgrading from a `jobs.json` version)**
-
-```bash
-python -m offer_monitor --import-json jobs.json
-```
-
-Do this **before the first run**. Otherwise every offer already in your archive is sent to subscribers as new. Imported offers keep their timestamps and get no verdicts. Running it twice is safe.
-
-**5. Test run without Telegram**
+**4. Test run without Telegram**
 
 ```bash
 python -m offer_monitor --once --no-notify -v
@@ -147,7 +140,7 @@ INFO verdict SKIP for offer 5381969 (uuid 05185bf4-...)
 
 If you see `WARNING verdicts disabled: …`, check [Troubleshooting](#troubleshooting).
 
-**6. Start monitoring**
+**5. Start monitoring**
 
 ```bash
 python -m offer_monitor
@@ -175,12 +168,7 @@ Start-Process .venv\Scripts\pythonw.exe `
 
 ### Option B: run with Docker
 
-**1. Prepare `data/`** as in steps 2–4 above (config, backstory, optional import). The import can also run inside the container:
-
-```bash
-cp jobs.json data/
-docker compose run --rm --no-deps monitor python -m offer_monitor -c /data/configs/config.yaml --import-json /data/jobs.json
-```
+**1. Prepare `data/`** as in steps 2–3 above (config, backstory).
 
 **2. Secrets (optional).** Put the bot token and API key in `data/configs/config.yaml` (`telegram.token`, `model.api_key`). If they're `null` there, the monitor reads `TELEGRAM_BOT_TOKEN` and the provider's variable (e.g. `GOOGLE_API_KEY`) from the environment.
 
@@ -194,7 +182,7 @@ This is the only way to start the Docker version; `run-monitor.bat` always runs 
 
 | Service | What it does |
 |---|---|
-| `monitor` | Runs `python -m offer_monitor -c /data/configs/config.yaml -v`, restarting unless stopped |
+| `monitor` | Runs `python -m offer_monitor -v`, restarting unless stopped |
 | `viewer` | sqlite-web at http://localhost:8080 for browsing `jobs.db`. It listens on localhost only and **can edit** the database. |
 
 Everyday commands:
@@ -203,16 +191,17 @@ Everyday commands:
 docker compose logs -f monitor        # follow output
 docker compose stop monitor           # pause monitoring
 docker compose down                   # stop everything
-docker compose run --rm --no-deps monitor python -m offer_monitor -c /data/configs/config.yaml --once -v   # single run
+docker compose run --rm --no-deps monitor python -m offer_monitor --once -v   # single run
 ```
 
 > **Run either locally or in Docker, not both.** They share `data/`, so running both would scrape and notify every offer twice.
 
 ## Configuration
 
-`data/configs/config.yaml` holds the shared settings. Each job source has its own file in `data/configs/`, and a source is on when its file exists: `data/configs/profesia_sk.yaml` for Profesia.sk and `data/configs/linkedin.yaml` for LinkedIn. `-c FILE` picks another main file; the provider files are read from the same folder. Relative paths resolve against the config's folder. The committed examples are the `*.example.yaml` files in `data/configs/`.
+`data/configs/config.yaml` holds the shared settings. Each job source has its own file in `data/configs/`, and a source is on when `providers` lists it: `profesia` reads `data/configs/profesia_sk.yaml` and `linkedin` reads `data/configs/linkedin.yaml`. A provider file that isn't listed is ignored. There is one config: the monitor always reads `data/configs/config.yaml` from the folder it runs in (the project folder, or `/app` in Docker). Relative paths resolve against that folder. The committed examples are the `*.example.yaml` files in `data/configs/`.
 
 ```yaml
+providers: [profesia, linkedin]
 db: ../jobs.db
 backstory: ../agent_context/backstory.md
 interval: 60
@@ -229,6 +218,7 @@ model:
 
 | Key | Default | Meaning |
 |---|---|---|
+| `providers` | required | Sources to run: `profesia`, `linkedin`. Each listed one needs its file in the same folder; `[]` runs none |
 | `db` | `../jobs.db` | SQLite database (paths resolve against `data/configs/`, so `../` is `data/`) |
 | `backstory` | `../agent_context/backstory.md` | Your experience, for the offer reviewer |
 | `interval` | `60` | Minutes between scrapes |
@@ -241,7 +231,7 @@ model:
 | `model.api_key` | `null` | `null` falls back to `GOOGLE_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` |
 ### Profesia.sk source
 
-`data/configs/profesia_sk.yaml` holds the Profesia searches. Without this file the Profesia source is off. Example: [`data/configs/profesia_sk.example.yaml`](data/configs/profesia_sk.example.yaml).
+`data/configs/profesia_sk.yaml` holds the Profesia searches. It's read when `providers` lists `profesia`. Example: [`data/configs/profesia_sk.example.yaml`](data/configs/profesia_sk.example.yaml).
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -275,7 +265,7 @@ Common segments:
 
 ### LinkedIn source
 
-With `data/configs/linkedin.yaml`, every run also searches LinkedIn through the [LinkedIn MCP server](https://github.com/stickerdaniel/linkedin-mcp-server). For each search it collects job IDs, skips the ones already stored, opens the rest and reads company, title, location, posted time and work type from the job page. The jobs then go through the same store, Telegram messages and verdicts as Profesia offers. Example: [`data/configs/linkedin.example.yaml`](data/configs/linkedin.example.yaml).
+With `linkedin` in `providers` and its file `data/configs/linkedin.yaml`, every run also searches LinkedIn through the [LinkedIn MCP server](https://github.com/stickerdaniel/linkedin-mcp-server). For each search it collects job IDs, skips the ones already stored, opens the rest and reads company, title, location, posted time and work type from the job page. The jobs then go through the same store, Telegram messages and verdicts as Profesia offers. Example: [`data/configs/linkedin.example.yaml`](data/configs/linkedin.example.yaml).
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -304,18 +294,11 @@ Limits:
 
 ### CLI options
 
+The options only pick how the monitor runs. Every setting (sources, searches, paging, interval, database) lives in `data/configs/`, which the monitor always reads from the project folder, whatever folder you start it from.
+
 | Option | Meaning |
 |---|---|
-| `KEYWORD` | One-off Profesia search that ignores the config's searches (and LinkedIn), e.g. `python -m offer_monitor "c#" --remote 2 --once` |
-| `--segment SLUG`, `--remote N`, `--min-salary N`, `--salary-period m\|h` | Filters for a one-off `KEYWORD` search |
 | `--once` | Scrape once, wait for verdicts, exit |
-| `--interval MINUTES` | Minutes between scrapes |
-| `-c FILE` | Main config file (default `data/configs/config.yaml`); the provider files are read from the same folder |
-| `--db FILE` | Database file |
-| `--days N` | Only offers from the last N days, for every search |
-| `--pages N` | Max listing pages per search |
-| `--delay SECONDS` | Seconds between page requests |
-| `--import-json FILE` | Import an old `jobs.json` into the database, then exit |
 | `--no-notify` | Don't send Telegram messages |
 | `--log FILE` | Append all output to FILE |
 | `-v` | Verbose logging, including verdict lines |
@@ -368,7 +351,7 @@ offer_monitor/
 ├── settings.py           RetryPolicy and YAML loading (shared by all configs)
 ├── http.py               Retry-After parsing, shared by the sources and the offer fetcher
 ├── models.py             Dataclasses: Job, Salary, Verdict
-├── store.py              SQLite store and legacy jobs.json import
+├── store.py              SQLite store
 ├── telegram.py           Bot API client, subscribers, message formatting
 ├── providers/
 │   ├── __init__.py       Registry: build_providers(config), source labels
@@ -406,7 +389,9 @@ Design notes:
 
 | Symptom | Fix |
 |---|---|
-| `data/configs/config.yaml not found` | Do [step 2](#option-a-run-locally), or pass `-c FILE` |
+| `data/configs/config.yaml not found` | Do [step 2](#option-a-run-locally) |
+| `config.yaml: providers: list the sources to run` | Your config predates the list: add `providers: [profesia]` (plus `linkedin` if you use it) |
+| `providers lists 'linkedin', but … linkedin.yaml is missing` | Copy that provider's `*.example.yaml` next to `config.yaml`, or remove it from `providers` |
 | `verdicts disabled: …` | The message names the cause: the provider package isn't installed, the API key is missing, or `backstory.md` isn't at the `backstory` path |
 | `profesia skipped after N attempt(s) (ProfesiaUnavailableError)` | Profesia could not be reached in any try. Check the connection; the next run tries again |
 | `profesia failed (ProfesiaBlockedError), not retrying` | Profesia refused the requests (401/403). The source is skipped this run; wait before running again |
@@ -420,7 +405,6 @@ Design notes:
 | `linkedin skipped: … login …` | Sign in to the LinkedIn window that opened (console run), then the next run picks LinkedIn up |
 | `linkedin skipped: …` with `uvx` not found | Install [uv](https://docs.astral.sh/uv/) |
 | `Telegram rejected the bot token` | Wrong `telegram.token` / `TELEGRAM_BOT_TOKEN` |
-| Every old offer arrived in Telegram as new | `--import-json` wasn't run before the first run |
 | Offers arrive twice | The local monitor and the Docker `monitor` are both running |
 
 ## Development
@@ -438,7 +422,7 @@ Tests run offline against HTML fixtures in `tests/fixtures/` and a scripted fake
 | `test_scraper.py` | HTTP errors per cause, pagination, Profesia provider |
 | `test_linkedin.py` | LinkedIn job parsing, MCP calls, error classes, time limit |
 | `test_sources.py` | Provider registry, dedup, retry settings |
-| `test_store.py` | SQLite upsert, deduplication, legacy JSON import, migration |
+| `test_store.py` | SQLite upsert, round trip, deduplication, migration |
 | `test_config.py` | Config validation, path resolution, error messages |
 | `test_telegram.py` | Bot commands, subscribers, per-offer messages, verdict formatting |
 | `test_agents.py` | Orchestrator → offer_reviewer delegation, structured verdicts, prompts |

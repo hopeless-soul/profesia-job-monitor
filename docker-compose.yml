@@ -4,7 +4,7 @@ services:
   monitor:
     build: .
     volumes:
-      - ./data:/data
+      - ./data:/app/data
     restart: unless-stopped
 
   # browse jobs.db at http://localhost:8080 (bound to localhost only; the viewer can edit the DB)

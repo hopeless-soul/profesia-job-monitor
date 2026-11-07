@@ -9,6 +9,5 @@ tests
 *.db
 *.log
 config.json
-jobs.json
 subscribers.json
 backstory.md

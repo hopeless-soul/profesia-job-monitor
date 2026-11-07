@@ -1,4 +1,5 @@
-# Profesia.sk source. Copy to data/configs/profesia_sk.yaml to turn the source on.
+# Profesia.sk source. Copy to data/configs/profesia_sk.yaml and list profesia in `providers` in
+# config.yaml to turn the source on.
 # Filter values are documented in the README's "Search filters" section.
 
 pages: 3                    # listing pages per search (20 offers per page)

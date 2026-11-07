@@ -27,7 +27,6 @@ dist/
 config.json
 
 # Runtime data written by the monitor
-jobs.json
 subscribers.json
 *.db
 *.log

@@ -1,9 +1,11 @@
 # Shared settings. Copy to data/configs/config.yaml and edit.
 # Searches and retries live in configs/profesia_sk.yaml and configs/linkedin.yaml.
 
-db: ../jobs.db                 # SQLite offer database; relative paths resolve against this folder (data/configs/)
+db: ../jobs.db                # SQLite offer database; relative paths resolve against this folder (data/configs/)
 backstory: ../agent_context/backstory.md     # your experience, read by the offer reviewer (keep it out of git)
 interval: 60                   # minutes between scrapes; use --once for a single run
+
+providers: [profesia]         # sources to run: profesia (reads profesia_sk.yaml), linkedin (reads linkedin.yaml)
 
 telegram:
   token: null               # bot token from @BotFather; null uses the TELEGRAM_BOT_TOKEN env var

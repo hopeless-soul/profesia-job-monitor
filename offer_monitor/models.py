@@ -1,4 +1,4 @@
-# Job data model. Stored in SQLite by store.py; legacy jobs.json used the same field names.
+# Job data model. Stored in SQLite by store.py.
 
 from __future__ import annotations
 
@@ -62,8 +62,6 @@ class Job:
     @classmethod
     def from_dict(cls, d: dict) -> Job:
         d = dict(d)
-        # legacy jobs.json files predate the source field; they were all scraped from Profesia
-        d.setdefault("source", "profesia")
         if d.get("salary") is not None:
             d["salary"] = Salary.from_dict(d["salary"])
         if d.get("verdict") is not None:

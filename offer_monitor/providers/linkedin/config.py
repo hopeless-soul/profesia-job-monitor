@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validat
 
 from ...settings import SourceSettings, read_yaml, validate_file
 
-# File name next to the main config; the source is off when the file is missing
+# File name next to the main config; read when the main config's `providers` lists "linkedin"
 CONFIG_FILE = "linkedin.yaml"
 
 # Values the LinkedIn MCP server's search_jobs accepts, per filter

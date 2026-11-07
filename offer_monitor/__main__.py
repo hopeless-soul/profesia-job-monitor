@@ -1,17 +1,15 @@
-# CLI. By default runs forever, scraping every job source once per `interval` minutes
-# Sources come from profesia_sk.yaml and linkedin.yaml next to the config (data/configs/).
-# 
+# CLI. By default runs forever, scraping every job source once per `interval` minutes.
+# Every setting comes from data/configs/config.yaml; its `providers` list picks the sources,
+# and each reads its own file in the same folder (profesia_sk.yaml, linkedin.yaml).
+#
 #     python -m offer_monitor
-#     python -m offer_monitor --interval 30        # scrape every 30 min
 #     python -m offer_monitor --once               # single run, then exit
-#     python -m offer_monitor "c#" --remote 2 --once   # one-off Profesia search, ignores the config searches
-#     python -m offer_monitor --import-json jobs.json  # one-time import of the old JSON store
-# 
+#
 # Offers are stored in SQLite (config `db`). With a Telegram token (config
 # telegram.token or TELEGRAM_BOT_TOKEN), each new offer is sent to everyone who
 # sent /start to the bot. With an LLM configured (config `model`), every new
 # offer then gets a verdict that is saved and added to its Telegram message.
-# A `linkedin.yaml` next to the config turns LinkedIn searches on (local runs only).
+# `linkedin` in `providers` turns LinkedIn searches on (local runs only).
 from __future__ import annotations
 
 import argparse
@@ -30,101 +28,51 @@ from .config import Config, load_config
 from .errors import ConfigError
 from .models import Job, Verdict
 from .providers import build_providers
-from .providers.profesia_sk.config import ProfesiaConfig, Query
 from .providers.base import SourceProvider, SourceProviderError
 from .store import (
     connect,
     count_jobs,
-    insert_jobs,
     known_ids,
-    load_jobs,
     now_iso,
     refresh_known,
     save_message_ids,
     save_verdict,
     store_new,
 )
-from .telegram import Bot, Subscribers, TelegramAuthError, TelegramError, format_verdict, handle_updates, notify
+from .telegram import (
+    Bot,
+    Subscribers,
+    TelegramAuthError,
+    TelegramError,
+    format_verdict,
+    handle_updates,
+    notify,
+)
 
-# CLI parser, plus the shared default config path and console colors
 from .cli import build_parser
-from .globals import DEFAULT_CONFIG, GREY, ORANGE, RESET, YELLOW
+from .globals import GREY, ORANGE, RESET, YELLOW
 
-
-# Background workers for verdicts, so scraping and /start replies never wait on the LLM
+# Background workers for verdicts
 VERDICTS = ThreadPoolExecutor(max_workers=2, thread_name_prefix="verdict")
 
+# The config file, relative to the working directory
+CONFIG_PATH = Path("data/configs/config.yaml")
 
-def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> Config:
-    # Merge config file and CLI flags. CLI flags win.
-    if args.keyword is None and (
-        args.segment or args.remote is not None or args.min_salary is not None
-    ):
-        parser.error(
-            "search filters need a KEYWORD; put them in the config file instead"
-        )
+# Load config file
+def read_config(parser: argparse.ArgumentParser) -> Config:
+    if not CONFIG_PATH.exists():
+        parser.error(f"{CONFIG_PATH} not found; copy config.example.yaml in that folder to config.yaml")
+    try:
+        return load_config(CONFIG_PATH)
+    except ConfigError as e:
+        parser.error(str(e))
 
-    # Load config
-    config_given = args.config != DEFAULT_CONFIG
-    if args.config.exists():
-        try:
-            config = load_config(args.config)
-        except ConfigError as e:
-            parser.error(str(e))  # the error already names the file
-    elif config_given or args.keyword is None:
-        # require either explicit config or a one-off keyword
-        parser.error(
-            f"{args.config} not found; copy data/configs/config.example.yaml to data/configs/config.yaml or pass a KEYWORD"
-        )
-    else:
-        config = Config()
 
-    # one-off keyword search overrides all config searches
-    if args.keyword is not None:
-        # pydantic rejects a bad keyword or segment, and its ValidationError is a ValueError
-        try:
-            query = Query(
-                keyword=args.keyword,
-                segments=args.segment,
-                remote_work=args.remote,
-                min_salary=args.min_salary,
-                salary_period=args.salary_period,
-            )
-        except ValueError as e:
-            parser.error(str(e))
-        # keep the Profesia file's paging and retry settings, replace only the searches
-        if config.profesia is None:
-            config.profesia = ProfesiaConfig(searches=[query])
-        config.profesia.searches = [query]
-        config.linkedin = None  # one-off searches are Profesia-only
-
-    # apply days filter to all Profesia searches
-    if args.days is not None and config.profesia:
-        for query in config.profesia.searches:
-            query.count_days = args.days
-
-    # override database location
-    if args.db is not None:
-        config.db = args.db
-
-    # override max pages per search (Profesia)
-    if args.pages is not None and config.profesia:
-        config.profesia.pages = args.pages
-
-    # override request delay (Profesia)
-    if args.delay is not None and config.profesia:
-        config.profesia.delay = args.delay
-
-    # override scrape interval, must be positive
-    if args.interval is not None:
-        if args.interval <= 0:
-            parser.error("--interval must be positive")
-        config.interval = args.interval
-    return config
-
-# Fetch one source. A retryable failure is tried again per the provider's retry policy, waiting the source's
-# Retry-After when it sent one; a failure a retry cannot fix gives up at once. None when the source gives up.
-def fetch_source(provider: SourceProvider, known: Callable[[list[int]], set[int]]) -> list[Job] | None:
+# Fetch one source
+# Note: Retry-After when it sent one; a failure a retry cannot fix gives up at once. None when the source gives up.
+def fetch_source(
+    provider: SourceProvider, known: Callable[[list[int]], set[int]]
+) -> list[Job] | None:
     attempts, delay = provider.retry.attempts, provider.retry.delay
     for attempt in range(1, attempts + 1):
         try:
@@ -132,15 +80,31 @@ def fetch_source(provider: SourceProvider, known: Callable[[list[int]], set[int]
         except SourceProviderError as e:
             kind = type(e).__name__
             if not e.retryable:
-                logging.warning("%s failed (%s), not retrying: %s", provider.name, kind, e)
+                logging.warning(
+                    "%s failed (%s), not retrying: %s", provider.name, kind, e
+                )
                 return None
             # the last attempt gives up; earlier ones wait and try again
             if attempt == attempts:
-                logging.warning("%s skipped after %d attempt(s) (%s): %s", provider.name, attempts, kind, e)
+                logging.warning(
+                    "%s skipped after %d attempt(s) (%s): %s",
+                    provider.name,
+                    attempts,
+                    kind,
+                    e,
+                )
                 return None
             # wait what the source asked for, or the policy's delay when it sent no Retry-After
             wait = e.retry_after if e.retry_after is not None else delay
-            logging.warning("%s attempt %d of %d failed (%s), retrying in %gs: %s", provider.name, attempt, attempts, kind, wait, e)
+            logging.warning(
+                "%s attempt %d of %d failed (%s), retrying in %gs: %s",
+                provider.name,
+                attempt,
+                attempts,
+                kind,
+                wait,
+                e,
+            )
             time.sleep(wait)
     return None
 
@@ -152,7 +116,7 @@ def run_once(
     subs: Subscribers | None,
     review: Callable[[str], Verdict] | None = None,
     providers: list[SourceProvider] | None = None,
-) -> None:
+):
     providers = build_providers(config) if providers is None else providers
 
     # STAGE 1
@@ -186,7 +150,9 @@ def run_once(
     # print new offers and totals
     for job in added:
         salary = job.salary.raw if job.salary else "-"
-        print(f"{YELLOW}NEW {job.source} {job.id}  {job.title} | {job.company} | {salary}{RESET}")
+        print(
+            f"{YELLOW}NEW {job.source} {job.id}  {job.title} | {job.company} | {salary}{RESET}"
+        )
     # summary line in orange, then a blank line
     print(
         f"{ORANGE}Scraped {scraped}, new {len(added)}, dup {dups}, total {total} in {config.db}{RESET}"
@@ -204,16 +170,20 @@ def run_once(
                 save_message_ids(conn, offer_uuid, ids)
         print(f"Notified {len(subs.chats)} Telegram subscriber(s) \n\n")
 
-    # STAGE 3, 
+    # STAGE 3,
     # verdicts: only after every source is fetched and stored; on_verdict runs when each one finishes
     if review:
         for job in added:
             future = VERDICTS.submit(review, job.url)
-            future.add_done_callback(partial(on_verdict, config.db, bot, job, message_ids.get(job.uuid, {})))
+            future.add_done_callback(
+                partial(on_verdict, config.db, bot, job, message_ids.get(job.uuid, {}))
+            )
 
 
 # Verdict callback: save it, add it to the offer's Telegram messages, log it
-def on_verdict(db: Path, bot: Bot | None, job: Job, message_ids: dict[int, int], future: Future) -> None:
+def on_verdict(
+    db: Path, bot: Bot | None, job: Job, message_ids: dict[int, int], future: Future
+) -> None:
     # skip cancelled reviews (Ctrl+C), only log failed ones
     if future.cancelled():
         return
@@ -234,7 +204,12 @@ def on_verdict(db: Path, bot: Bot | None, job: Job, message_ids: dict[int, int],
             try:
                 bot.edit(chat_id, message_id, text)
             except TelegramError as e:
-                logging.warning("verdict edit for offer %s in chat %s failed: %s", job.id, chat_id, e)
+                logging.warning(
+                    "verdict edit for offer %s in chat %s failed: %s",
+                    job.id,
+                    chat_id,
+                    e,
+                )
 
     logging.info("verdict %s for offer %s (uuid %s)", job.verdict.tag, job.id, job.uuid)
 
@@ -254,7 +229,10 @@ def build_review(config: Config) -> Callable[[str], Verdict] | None:
         backstory = config.backstory.read_text(encoding="utf-8")
         # append pet projects (projects/*.md next to the backstory) as extra evidence
         projects = sorted((config.backstory.parent / "projects").glob("*.md"))
-        backstory += "".join(f"\n\n## Pet project: {p.stem}\n\n{p.read_text(encoding='utf-8')}" for p in projects)
+        backstory += "".join(
+            f"\n\n## Pet project: {p.stem}\n\n{p.read_text(encoding='utf-8')}"
+            for p in projects
+        )
         return partial(evaluate, build_orchestrator(build_llm(config.model), backstory))
     except Exception as e:
         logging.warning("verdicts disabled: %s", e)
@@ -277,17 +255,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # Load config
-    config = resolve_config(args, parser)
-
-    # Import Legacy JSON Scenario
-    if args.import_json:
-        if not args.import_json.exists():
-            parser.error(f"{args.import_json} not found")
-        jobs = load_jobs(args.import_json)
-        with closing(connect(config.db)) as conn, conn:
-            inserted = insert_jobs(conn, jobs)
-        print(f"Imported {inserted} of {len(jobs)} offers from {args.import_json} into {config.db}")
-        return 0
+    config = read_config(parser)
 
     # Bot setup
     bot = subs = None
@@ -318,11 +286,15 @@ def main(argv: list[str] | None = None) -> int:
     interval = config.interval * 60
     next_run = time.monotonic()
     bot_note = (
-        f"\nTelegram: {len(subs.chats)} Telegram subscriber(s)" if subs else ", Telegram: OFF"
+        f"\nTelegram: {len(subs.chats)} Telegram subscriber(s)"
+        if subs
+        else ", Telegram: OFF"
     )
     verdict_note = "\nVerdicts: ON" if review else "\nVerdicts: OFF"
     linkedin_note = "\nLinkedIn: ON" if config.linkedin else ""
-    print(f"Running: scraping every {config.interval:g} min. Ctrl+C to stop.{bot_note}{verdict_note}{linkedin_note}\n")
+    print(
+        f"Running: scraping every {config.interval:g} min. Ctrl+C to stop.{bot_note}{verdict_note}{linkedin_note}\n"
+    )
     try:
         while True:
             try:

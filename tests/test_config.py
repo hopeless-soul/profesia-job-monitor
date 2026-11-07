@@ -3,8 +3,6 @@ from pathlib import Path
 
 import pytest
 
-from offer_monitor.__main__ import resolve_config
-from offer_monitor.cli import build_parser
 from offer_monitor.config import load_config, parse_config as parse_main
 from offer_monitor.errors import ConfigError
 from offer_monitor.providers.linkedin.config import LinkedInConfig, LinkedInSearch, load_config as load_linkedin, parse_config as parse_linkedin
@@ -13,16 +11,18 @@ from offer_monitor.providers.profesia_sk.config import Query, load_config as loa
 ROOT = Path(__file__).parents[1]
 
 
-# the main example config is valid, and a run without provider files has both sources off
-def test_main_example_loads_with_both_sources_off(tmp_path):
+# the main example config is valid and runs only the Profesia source it lists
+def test_main_example_loads(tmp_path):
     shutil.copy(ROOT / "data" / "configs" / "config.example.yaml", tmp_path / "config.yaml")
+    shutil.copy(ROOT / "data" / "configs" / "profesia_sk.example.yaml", tmp_path / "profesia_sk.yaml")
 
     config = load_config(tmp_path / "config.yaml")
 
     # the example points at ../jobs.db, so the data folder is the copy's parent
     assert config.db.resolve() == (tmp_path / ".." / "jobs.db").resolve()
     assert config.backstory.resolve() == (tmp_path / ".." / "agent_context" / "backstory.md").resolve()
-    assert config.profesia is None
+    assert config.providers == ["profesia"]
+    assert config.profesia is not None
     assert config.linkedin is None
     assert config.model.api_key is None
 
@@ -36,15 +36,28 @@ def test_provider_examples_load():
     assert linkedin.searches[0] == LinkedInSearch(keywords="python developer in Slovakia", work_type="remote,hybrid")
 
 
-# a provider is on exactly when its file sits next to the main config
-def test_provider_files_turn_sources_on(tmp_path):
-    (tmp_path / "config.yaml").write_text("{}\n", encoding="utf-8")
+# only the providers in the list are loaded; a provider file that isn't listed is ignored
+def test_only_listed_providers_are_loaded(tmp_path):
+    (tmp_path / "config.yaml").write_text("providers: [profesia]\n", encoding="utf-8")
     (tmp_path / "profesia_sk.yaml").write_text("searches:\n  - keyword: c#\n", encoding="utf-8")
+    (tmp_path / "linkedin.yaml").write_text("searches:\n  - keywords: x\n", encoding="utf-8")
 
     config = load_config(tmp_path / "config.yaml")
 
     assert [q.keyword for q in config.profesia.searches] == ["c#"]
     assert config.linkedin is None
+
+
+# the list is required, holds known names only, and every listed provider needs its file
+def test_providers_list_errors(tmp_path):
+    with pytest.raises(ConfigError, match="config.yaml: providers: list the sources to run"):
+        parse_main({})
+    with pytest.raises(ConfigError, match=r"providers\[0\]"):
+        parse_main({"providers": ["indeed"]})
+
+    (tmp_path / "config.yaml").write_text("providers: [linkedin]\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="providers lists 'linkedin', but .*linkedin.yaml is missing"):
+        load_config(tmp_path / "config.yaml")
 
 
 # top-level count_days is inherited by searches that don't set their own; an explicit null stays null
@@ -66,29 +79,12 @@ def test_profesia_file_rejects_bad_values():
             parse_profesia(data)
 
 
-# CLI flags win over the provider files
-def test_cli_flags_override_config(tmp_path):
-    path = tmp_path / "config.yaml"
-    path.write_text("{}\n", encoding="utf-8")
-    (tmp_path / "profesia_sk.yaml").write_text("pages: 2\nsearches:\n  - keyword: python\n", encoding="utf-8")
-    (tmp_path / "linkedin.yaml").write_text("searches:\n  - keywords: x\n", encoding="utf-8")
-    parser = build_parser()
-
-    config = resolve_config(parser.parse_args(["c#", "--config", str(path), "--pages", "5", "--days", "1", "--interval", "15"]), parser)
-
-    assert config.profesia.searches == [Query(keyword="c#", count_days=1)]
-    assert config.linkedin is None  # one-off searches are Profesia-only
-    assert config.profesia.pages == 5
-    assert config.interval == 15
-    assert config.db == tmp_path / "jobs.db"
-
-
 # model.api_key is read from the main config, empty means "use the env var", non-strings are rejected
 def test_model_api_key():
-    assert parse_main({"model": {"api_key": "k"}}).model.api_key == "k"
-    assert parse_main({"model": {"api_key": ""}}).model.api_key is None
+    assert parse_main({"providers": [], "model": {"api_key": "k"}}).model.api_key == "k"
+    assert parse_main({"providers": [], "model": {"api_key": ""}}).model.api_key is None
     with pytest.raises(ConfigError, match="model.api_key"):
-        parse_main({"model": {"api_key": 1}})
+        parse_main({"providers": [], "model": {"api_key": 1}})
 
 
 # source settings left in config.yaml get a message that says where they moved

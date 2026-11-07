@@ -1,5 +1,5 @@
 # Load data/configs/config.yaml: the shared settings. Each job source has its own file next to it
-# (profesia_sk.yaml, linkedin.yaml); a source is on when its file exists.
+# (profesia_sk.yaml, linkedin.yaml); a source is on when `providers` lists it.
 
 from pathlib import Path
 from typing import Literal
@@ -15,6 +15,9 @@ CONFIG_FILE = "config.yaml"
 
 # Keys that now live in a provider file; finding one here is a clear error, not an unknown key
 _MOVED_KEYS = {"searches", "pages", "delay", "count_days", "retry", "linkedin", "profesia"}
+
+# Name in `providers` -> the config module of that source (its CONFIG_FILE and load_config)
+_PROVIDER_CONFIGS = {"profesia": profesia_config, "linkedin": linkedin_config}
 
 
 class TelegramConfig(BaseModel):
@@ -45,6 +48,8 @@ class ModelConfig(BaseModel):
 class Config(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # sources to run; each one's file must sit next to this config. The file requires the key (see parse_config).
+    providers: list[Literal["profesia", "linkedin"]] = Field(default_factory=list)
     db: Path = Path("jobs.db")  # SQLite offer store
     backstory: Path = Path("backstory.md")  # candidate profile for the offer reviewer
     interval: float = Field(60, gt=0)  # minutes between scrapes
@@ -54,15 +59,19 @@ class Config(BaseModel):
     linkedin: linkedin_config.LinkedInConfig | None = None  # None = LinkedIn source off
 
 
-# Parse the shared settings from decoded YAML; a key that moved to a provider file gets a clear error
+# Parse the shared settings from decoded YAML; a key that moved to a provider file, or a missing
+# `providers` list, gets a clear error
 def parse_config(data: dict, source: str | Path = CONFIG_FILE) -> Config:
     if moved := data.keys() & _MOVED_KEYS:
         key = sorted(moved)[0]
         raise ConfigError(f"{source}: '{key}' moved out of this file; put it in profesia_sk.yaml or linkedin.yaml")
+    # no default here: a config without the list would otherwise run with no sources and say nothing
+    if "providers" not in data:
+        raise ConfigError(f"{source}: providers: list the sources to run, e.g. [profesia, linkedin]")
     return validate_file(source, Config, data)
 
 
-# Load config.yaml and every provider file beside it. Relative paths resolve against the config's folder.
+# Load config.yaml and the file of every provider it lists. Relative paths resolve against the config's folder.
 def load_config(path: Path) -> Config:
     config = parse_config(read_yaml(path), path)
     if not config.db.is_absolute():
@@ -72,11 +81,11 @@ def load_config(path: Path) -> Config:
     if not config.telegram.subscribers.is_absolute():
         config.telegram.subscribers = path.parent / config.telegram.subscribers
 
-    # a provider is on when its file sits next to the main config
-    profesia_file = path.parent / profesia_config.CONFIG_FILE
-    if profesia_file.exists():
-        config.profesia = profesia_config.load_config(profesia_file)
-    linkedin_file = path.parent / linkedin_config.CONFIG_FILE
-    if linkedin_file.exists():
-        config.linkedin = linkedin_config.load_config(linkedin_file)
+    # load only the listed providers (the field has the same name); a listed one without its file is an error
+    for name in config.providers:
+        module = _PROVIDER_CONFIGS[name]
+        file = path.parent / module.CONFIG_FILE
+        if not file.exists():
+            raise ConfigError(f"{path}: providers lists '{name}', but {file} is missing")
+        setattr(config, name, module.load_config(file))
     return config

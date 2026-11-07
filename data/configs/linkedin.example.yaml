@@ -1,4 +1,5 @@
-# LinkedIn source through the LinkedIn MCP server. Copy to data/configs/linkedin.yaml to turn the source on.
+# LinkedIn source through the LinkedIn MCP server. Copy to data/configs/linkedin.yaml and add linkedin to
+# `providers` in config.yaml to turn the source on.
 # Local runs only: the first run needs a console to log in. See the README's LinkedIn section.
 
 date_posted: past_24_hours  # past_hour, past_24_hours, past_week or past_month

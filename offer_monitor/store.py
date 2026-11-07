@@ -1,5 +1,4 @@
 # Job store: SQLite database, offers unique by (source, id).
-# The legacy jobs.json file (schema_version 1) is only read, for --import-json.
 # Callers own transactions: wrap writes in `with conn:` to commit.
 
 from __future__ import annotations
@@ -11,8 +10,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .models import Job, Verdict
-
-SCHEMA_VERSION = 1
 
 # Offers table; {name} lets the migration build it under a temporary name
 _OFFERS_TABLE = """
@@ -62,17 +59,6 @@ _REFRESH_COLUMNS = (
 # Current UTC time as an ISO string
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-# Read the legacy jobs.json file
-def load_jobs(path: Path) -> list[Job]:
-    if not path.exists():
-        return []
-    data = json.loads(path.read_text(encoding="utf-8"))
-    version = data.get("schema_version")
-    if version != SCHEMA_VERSION:
-        raise ValueError(f"{path}: unsupported schema_version {version!r}")
-    return [Job.from_dict(d) for d in data["jobs"]]
 
 
 # Open the database, creating the file and tables when missing

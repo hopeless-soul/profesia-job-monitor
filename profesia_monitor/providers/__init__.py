@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..sources import SourceProvider
+from .base import SourceProvider
 from .linkedin import LinkedInProvider
 from .profesia_sk import ProfesiaProvider
 

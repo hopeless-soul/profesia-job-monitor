@@ -15,7 +15,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from ...models import Job
-from ...sources import SourceProvider, SourceProviderError
+from ..base import SourceProvider, SourceProviderError
 from .config import LinkedInConfig
 
 log = logging.getLogger(__name__)

@@ -10,7 +10,7 @@ from profesia_monitor.config import Config
 from profesia_monitor.models import Job, Verdict
 from profesia_monitor.providers.profesia_sk.provider import ProfesiaError
 from profesia_monitor.settings import RetryPolicy
-from profesia_monitor.sources import SourceProvider
+from profesia_monitor.providers.base import SourceProvider
 from profesia_monitor.store import connect, get_job, upsert_jobs
 from profesia_monitor.telegram import TelegramError
 

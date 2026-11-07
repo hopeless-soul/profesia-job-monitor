@@ -362,12 +362,13 @@ profesia_monitor/
 ├── __main__.py           CLI, main loop, run_once with per-source retries
 ├── config.py             Main config (config.yaml) and loading the provider files
 ├── errors.py             ConfigError
-├── sources.py            SourceProvider base class, SourceProviderError, RetryPolicy
+├── settings.py           RetryPolicy and YAML loading (shared by all configs)
 ├── models.py             Dataclasses: Job, Salary, Verdict
 ├── store.py              SQLite store and legacy jobs.json import
 ├── telegram.py           Bot API client, subscribers, message formatting
 ├── providers/
 │   ├── __init__.py       Registry: build_providers(config), source labels
+│   ├── base.py           SourceProvider base class and SourceProviderError
 │   ├── profesia_sk/      Profesia.sk source
 │   │   ├── config.py     profesia_sk.yaml: searches, pages, delay, retry
 │   │   ├── scraper.py    Query builder, HTTP fetching, pagination

@@ -5,7 +5,7 @@ from __future__ import annotations
 import requests
 
 from ...models import Job
-from ...sources import SourceProvider, SourceProviderError
+from ..base import SourceProvider, SourceProviderError
 from .config import ProfesiaConfig
 from .scraper import scrape
 

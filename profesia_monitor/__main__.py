@@ -33,7 +33,7 @@ from .errors import ConfigError
 from .models import Job, Verdict
 from .providers import build_providers
 from .providers.profesia_sk.config import ProfesiaConfig, Query
-from .sources import SourceProvider, SourceProviderError
+from .providers.base import SourceProvider, SourceProviderError
 from .store import (
     connect,
     count_jobs,

@@ -1,4 +1,4 @@
-# Shared interface for job sources (Profesia.sk, LinkedIn, ...). Imports no provider, so providers can import it.
+# Base class for job sources (Profesia.sk, LinkedIn, ...) and the error they raise. Imports no provider, so providers can import it.
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import ClassVar
 
-from .models import Job
-from .settings import RetryPolicy
+from ..models import Job
+from ..settings import RetryPolicy
 
 
 # Base error for a source that failed this run; run_once retries it, then logs it and moves on
@@ -21,7 +21,7 @@ class SourceProvider(ABC):
     name: ClassVar[str]
     # Shown in Telegram messages
     label: ClassVar[str]
-    # Retry settings used by run_once when fetch() raises SourceProviderError
+    # Retry settings used by fetch_source (called from run_once) when fetch() raises SourceProviderError
     retry: RetryPolicy = RetryPolicy()
 
     # New offers only, each with source=self.name. `known(ids)` returns the IDs already stored.

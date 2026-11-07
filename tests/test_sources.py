@@ -9,7 +9,7 @@ from profesia_monitor.providers.linkedin.config import parse_config as parse_lin
 from profesia_monitor.providers.profesia_sk import ProfesiaConfig, ProfesiaError, ProfesiaProvider
 from profesia_monitor.providers.profesia_sk.config import Query, parse_config as parse_profesia
 from profesia_monitor.settings import RetryPolicy
-from profesia_monitor.sources import SourceProviderError
+from profesia_monitor.providers.base import SourceProviderError
 
 
 # Profesia alone when only its config is loaded; both, in order, when LinkedIn is too

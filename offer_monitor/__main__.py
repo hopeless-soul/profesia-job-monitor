@@ -12,7 +12,6 @@
 # `linkedin` in `providers` turns LinkedIn searches on (local runs only).
 from __future__ import annotations
 
-import argparse
 import logging
 import os
 import sys
@@ -57,32 +56,24 @@ YELLOW, ORANGE, GREY, RESET = "\033[33m", "\033[38;5;208m", "\033[90m", "\033[0m
 VERDICTS = ThreadPoolExecutor(max_workers=2, thread_name_prefix="verdict")
 
 
-# Load config file and build the providers it lists (each reads its own file next to it)
-def read_config(parser: argparse.ArgumentParser) -> tuple[Config, list[SourceProvider]]:
-    try:
-        config = load_config()
-        return config, build_providers(config.providers, CONFIG_DIR)
-    except ConfigError as e:
-        parser.error(str(e))
-
-
-# Fetch one source
-# Note: Retry-After when it sent one; a failure a retry cannot fix gives up at once. None when the source gives up.
-def fetch_source(
-    provider: SourceProvider, known: Callable[[list[int]], set[int]]
-) -> list[Job] | None:
+def fetch_source(provider: SourceProvider) -> list[Job] | None:
+    """
+    Fetches a source;
+    Returns a list of offers / `None` when the source gives up;
+    """
     attempts, delay = provider.retry.attempts, provider.retry.delay
     for attempt in range(1, attempts + 1):
         try:
-            return provider.fetch(known)
+            return provider.fetch()
         except SourceProviderError as e:
             kind = type(e).__name__
+            # gives up
             if not e.retryable:
                 logging.warning(
                     "%s failed (%s), not retrying: %s", provider.name, kind, e
                 )
                 return None
-            # the last attempt gives up; earlier ones wait and try again
+            # the last attempt gives up;
             if attempt == attempts:
                 logging.warning(
                     "%s skipped after %d attempt(s) (%s): %s",
@@ -92,7 +83,8 @@ def fetch_source(
                     e,
                 )
                 return None
-            # wait what the source asked for, or the policy's delay when it sent no Retry-After
+            # wait if `retry_after` exist from the request result;
+            # wait `delay` from the configuration;
             wait = e.retry_after if e.retry_after is not None else delay
             logging.warning(
                 "%s attempt %d of %d failed (%s), retrying in %gs: %s",
@@ -107,8 +99,8 @@ def fetch_source(
     return None
 
 
-# Run Scrape Once
-def run_once(
+# Run Once
+def run(
     config: Config,
     bot: Bot | None,
     subs: Subscribers | None,
@@ -116,19 +108,30 @@ def run_once(
     *,
     providers: list[SourceProvider],
 ):
+    """
+    Run cycle once:
+    * fetch every source,
+    * store new offers,
+    * notify subscribers,
+    * run verdicts on them.
+    """
     # STAGE 1
     # fetch: every source fetches and drops its own repeats; a failing one is retried, then logged
-    # and skipped while the others still run
+    # and skipped while the others still run; no database access here, stored offers are dropped in stage 2
     fetched = []
     for provider in providers:
-        with closing(connect(config.db)) as conn:
-            jobs = fetch_source(provider, partial(known_ids, conn, provider.name))
+        jobs = fetch_source(provider)
         if jobs is None:
             continue
         jobs = provider.dedup_fetched(jobs)
         print(f"{provider.name}: {len(jobs)} offers")
         fetched.append((provider, jobs))
+
+    # TODO: dedupe fetched to each other  
+
     scraped = sum(len(jobs) for _, jobs in fetched)
+
+
 
     # STAGE 2
     # store (one transaction): each source picks its offers not stored yet, stored ones are refreshed,
@@ -255,8 +258,12 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
 
-    # Load config and the providers it lists
-    config, providers = read_config(parser)
+    # Load config and the providers it lists (each reads its own file next to it)
+    try:
+        config = load_config()
+        providers = build_providers(config.providers, CONFIG_DIR)
+    except ConfigError as e:
+        parser.error(str(e))
 
     # Bot setup
     bot = subs = None
@@ -278,7 +285,7 @@ def main(argv: list[str] | None = None) -> int:
                 parser.error("Telegram rejected the bot token")
             except TelegramError as e:
                 logging.warning("subscriber sync skipped: %s", e)
-        run_once(config, bot, subs, review, providers=providers)
+        run(config, bot, subs, review, providers=providers)
         # wait for pending verdicts before exiting
         VERDICTS.shutdown(wait=True)
         return 0
@@ -301,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 if time.monotonic() >= next_run:
                     next_run = time.monotonic() + interval
-                    run_once(config, bot, subs, review, providers=providers)
+                    run(config, bot, subs, review, providers=providers)
                 wait = max(0, int(next_run - time.monotonic()))
                 if bot and subs:
                     # Long-poll so /start and /stop get answered right away between scrapes.

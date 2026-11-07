@@ -1,12 +1,14 @@
 import asyncio
 import json
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from functools import partial
 from pathlib import Path
 
 import pytest
 from mcp.types import CallToolResult, TextContent
 
+from offer_monitor.models import Job
+from offer_monitor.store import connect, insert_jobs
 from offer_monitor.providers.linkedin import provider as linkedin
 from offer_monitor.providers.linkedin.config import LinkedInConfig, LinkedInSearch
 from offer_monitor.providers.linkedin.errors import LinkedInAuthError, LinkedInError, LinkedInResponseError, LinkedInUnavailableError
@@ -61,9 +63,9 @@ def opener(session):
 
 
 # Run collect against a session and return the jobs it gathered
-def run_collect(session, config=CONFIG, known=lambda ids: set()):
+def run_collect(session, config=CONFIG):
     jobs = []
-    asyncio.run(collect(partial(_call, session), "linkedin", config, known, jobs))
+    asyncio.run(collect(partial(_call, session), "linkedin", config, jobs))
     return jobs
 
 
@@ -83,11 +85,11 @@ def test_parse_job_details_rejects_unexpected_text():
         parse_job_details(1, "Sign in\n\nJoin now", "linkedin")
 
 
-# details are read only for IDs not stored yet
-def test_collect_reads_only_new_jobs():
-    jobs = run_collect(FakeSession(replies([1, 2, 3])), known=lambda ids: {2})
+# details are read for every found ID
+def test_collect_reads_every_job():
+    jobs = run_collect(FakeSession(replies([1, 2, 3])))
 
-    assert [j.id for j in jobs] == [1, 3]
+    assert [j.id for j in jobs] == [1, 2, 3]
 
 
 # one failing search is skipped; the IDs of the other searches are still read
@@ -146,7 +148,7 @@ def test_mcp_result_has_is_error_field():
 def test_provider_fetches_jobs_through_its_session():
     provider = LinkedInProvider(CONFIG, open_session=opener(FakeSession(replies([1, 2]))))
 
-    jobs = provider.fetch(lambda ids: set())
+    jobs = provider.fetch()
 
     assert [(j.source, j.id) for j in jobs] == [("linkedin", 1), ("linkedin", 2)]
 
@@ -157,7 +159,20 @@ def test_provider_turns_start_failures_into_unavailable():
         raise FileNotFoundError("uvx")
 
     with pytest.raises(LinkedInUnavailableError):
-        LinkedInProvider(CONFIG, open_session=missing_uvx).fetch(lambda ids: set())
+        LinkedInProvider(CONFIG, open_session=missing_uvx).fetch()
+
+
+# get_known returns only this source's stored IDs, and nothing without a database
+def test_get_known_reads_stored_ids(tmp_path):
+    db = tmp_path / "offers.db"
+    with closing(connect(db)) as conn, conn:
+        insert_jobs(conn, [
+            Job(id=2, title="Dev", url="https://example.com/2", source="linkedin"),
+            Job(id=3, title="Dev", url="https://example.com/3", source="profesia"),
+        ])
+
+    assert LinkedInProvider(CONFIG, db=db).get_known([1, 2, 3]) == {2}
+    assert LinkedInProvider(CONFIG).get_known([1]) == set()
 
 
 # on timeout the jobs read so far are returned, not lost
@@ -165,4 +180,4 @@ def test_provider_keeps_jobs_read_before_the_time_limit():
     provider = LinkedInProvider(CONFIG, open_session=opener(SlowSession(replies([1, 2]))))
     provider.time_limit = 0.2
 
-    assert [j.id for j in provider.fetch(lambda ids: set())] == [1]
+    assert [j.id for j in provider.fetch()] == [1]

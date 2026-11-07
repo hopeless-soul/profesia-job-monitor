@@ -71,7 +71,7 @@ def test_provider_fetches_every_search():
     session = Session()
     provider = ProfesiaProvider(ProfesiaConfig(searches=[Query(keyword="c#"), Query(keyword="java")], pages=1, delay=0), session=session)
 
-    jobs = provider.fetch(lambda ids: set())
+    jobs = provider.fetch()
 
     assert session.calls == 2
     assert jobs and {j.source for j in jobs} == {"profesia"}

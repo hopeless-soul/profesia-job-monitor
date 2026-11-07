@@ -68,10 +68,9 @@ class SourceProvider(ABC):
     retry: RetryPolicy = RetryPolicy()
 
     @abstractmethod
-    def fetch(self, known: Callable[[list[int]], set[int]]) -> list[Job]:
+    def fetch(self) -> list[Job]:
         """
-        Return the offers found this run;
-        `known(ids)` returns IDs already stored in the database. use it to skip costly per-offer reads for those.
+        Return the offers found this run, stored or not; `db_dedup` drops the stored ones later;
 
         Each offer has `source=self.name`;
 

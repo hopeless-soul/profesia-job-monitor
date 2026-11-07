@@ -266,7 +266,7 @@ Common segments:
 
 ### LinkedIn source
 
-With `linkedin` in `providers` and its file `data/configs/linkedin.yaml`, every run also searches LinkedIn through the [LinkedIn MCP server](https://github.com/stickerdaniel/linkedin-mcp-server). For each search it collects job IDs, skips the ones already stored, opens the rest and reads company, title, location, posted time and work type from the job page. The jobs then go through the same store, Telegram messages and verdicts as Profesia offers. Example: [`data/configs/linkedin.example.yaml`](data/configs/linkedin.example.yaml).
+With `linkedin` in `providers` and its file `data/configs/linkedin.yaml`, every run also searches LinkedIn through the [LinkedIn MCP server](https://github.com/stickerdaniel/linkedin-mcp-server). For each search it collects job IDs, opens every one and reads company, title, location, posted time and work type from the job page. The jobs then go through the same store, Telegram messages and verdicts as Profesia offers. Example: [`data/configs/linkedin.example.yaml`](data/configs/linkedin.example.yaml).
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -319,7 +319,7 @@ flowchart LR
     O -->|callback: edit message| T
 ```
 
-1. **Scrape.** Every `interval` minutes, each search's listing pages are fetched and parsed. With `linkedin` set, LinkedIn searches run next; only job pages not stored yet are opened.
+1. **Scrape.** Every `interval` minutes, each search's listing pages are fetched and parsed. With `linkedin` set, LinkedIn searches run next, and every job page they find is opened. Sources don't read the database; stored offers are dropped in step 2.
 2. **Store.** Each source first drops its own repeats (`dedup_fetched`); after all sources finish, each picks its offers not stored yet (`db_dedup`), all in one transaction. Known offers get refreshed fields and `last_seen`; new ones get a UUID. A new offer whose title + company (case and spacing ignored) matches a stored offer from any source, or an earlier one in the same scrape, is stored but skips steps 3 and 4.
 3. **Notify.** Each new offer goes to every subscriber as its own message, about one per second per chat. The message IDs are saved.
 4. **Review.** In a background thread, the `orchestrator` agent receives the offer URL and calls the `offer_reviewer` subagent. The reviewer fetches the posting, rates every must-have against your backstory (✅ / 🟡 / ❌), and returns `{tag, content, url}`.

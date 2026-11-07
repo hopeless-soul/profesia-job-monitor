@@ -7,14 +7,17 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, closing
 from functools import partial
+from pathlib import Path
 from typing import ClassVar
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from ...models import Job
+from ...store import connect, known_ids
+from ...text import shorten
 from ..base import SourceProvider, SourceProviderError
 from .errors import LinkedInAuthError, LinkedInError, LinkedInResponseError, LinkedInUnavailableError
 from .config import LinkedInConfig
@@ -75,15 +78,9 @@ def parse_job_details(job_id: int, text: str, source: str) -> Job:
     )
 
 
-# Search every query, then read details of the IDs not stored yet; jobs are appended as they parse,
+# Search every query, then read details of every found ID; jobs are appended as they parse,
 # so the caller keeps them when the time limit cuts the run short
-async def collect(
-    call: Call,
-    source: str,
-    config: LinkedInConfig,
-    known: Callable[[list[int]], set[int]],
-    jobs: list[Job],
-) -> None:
+async def collect(call: Call, source: str, config: LinkedInConfig, jobs: list[Job]) -> None:
     # job IDs from every search, deduplicated, in result order; a failed search is skipped, the others still count
     ids: dict[int, None] = {}
     for search in config.searches:
@@ -100,11 +97,9 @@ async def collect(
         log.info("linkedin search %r: %d job ids", search.keywords, len(found))
         ids.update(dict.fromkeys(found))
 
-    # details only for new jobs; a failed one is skipped and retried next run (it isn't stored)
-    skip = known(list(ids))
-    todo = [job_id for job_id in ids if job_id not in skip]
-    log.info("linkedin: %d unique job ids, %d already stored, %d to read", len(ids), len(skip), len(todo))
-    for n, job_id in enumerate(todo):
+    # details for every job; a failed one is skipped and retried next run (it isn't stored)
+    log.info("linkedin: %d unique job ids to read", len(ids))
+    for n, job_id in enumerate(ids):
         # pause between detail requests so the logged-in browser isn't hit in a burst
         if n:
             await asyncio.sleep(config.delay)
@@ -113,7 +108,7 @@ async def collect(
             job = parse_job_details(job_id, result["sections"]["job_posting"], source)
             log.info(
                 "linkedin job %s parsed: %s | %s | %s | %s | %s",
-                job_id, job.title, job.company, job.location, job.posted_text, ", ".join(job.labels) or "-",
+                job_id, shorten(job.title), job.company, job.location, job.posted_text, ", ".join(job.labels) or "-",
             )
             jobs.append(job)
         except LinkedInAuthError:
@@ -156,16 +151,23 @@ class LinkedInProvider(SourceProvider):
     label = "LinkedIn"
     time_limit: ClassVar[float] = 300  # seconds for the whole LinkedIn step, so a stuck browser can't block the loop
 
-    def __init__(self, config: LinkedInConfig, open_session: SessionOpener = stdio_session):
-        self.config, self.open_session = config, open_session
+    def __init__(self, config: LinkedInConfig, open_session: SessionOpener = stdio_session, db: Path | None = None):
+        self.config, self.open_session, self.db = config, open_session, db
         self.retry = config.retry
+
+    # IDs found this run that are already stored; own short connection, none without a database
+    def get_known(self, ids: list[int]) -> set[int]:
+        if self.db is None:
+            return set()
+        with closing(connect(self.db)) as conn:
+            return known_ids(conn, self.name, ids)
 
     # Blocking wrapper around one asyncio run. A timeout returns the jobs parsed so far.
     # Any other failure to talk to the server becomes LinkedInUnavailableError.
-    def fetch(self, known: Callable[[list[int]], set[int]]) -> list[Job]:
+    def fetch(self) -> list[Job]:
         jobs: list[Job] = []
         try:
-            asyncio.run(asyncio.wait_for(self._run(known, jobs), self.time_limit))
+            asyncio.run(asyncio.wait_for(self._run(jobs), self.time_limit))
         except TimeoutError:
             log.warning("linkedin stopped after %ss, keeping %d jobs", self.time_limit, len(jobs))
         except SourceProviderError:
@@ -175,6 +177,6 @@ class LinkedInProvider(SourceProvider):
         return jobs
 
     # Open the session, then collect
-    async def _run(self, known: Callable[[list[int]], set[int]], jobs: list[Job]) -> None:
+    async def _run(self, jobs: list[Job]) -> None:
         async with self.open_session() as session:
-            await collect(partial(_call, session), self.name, self.config, known, jobs)
+            await collect(partial(_call, session), self.name, self.config, jobs)

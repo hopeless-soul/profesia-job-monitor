@@ -7,7 +7,7 @@ import pytest
 import offer_monitor.__main__ as main
 import offer_monitor.agents.llm as llm
 import offer_monitor.agents.orchestrator as orchestrator
-from offer_monitor.__main__ import build_review, fetch_source, on_verdict, run_once
+from offer_monitor.__main__ import build_review, fetch_source, on_verdict, run
 from offer_monitor.config import Config, ModelConfig
 from offer_monitor.models import Job, Verdict
 from offer_monitor.providers.base import SourceProvider
@@ -30,7 +30,7 @@ class FakeProvider(SourceProvider):
         self.name, self.jobs, self.error, self.fail_times, self.retry = name, list(jobs), error, fail_times, retry
         self.calls = 0
 
-    def fetch(self, known):
+    def fetch(self):
         self.calls += 1
         if self.calls <= self.fail_times:
             raise self.error
@@ -136,7 +136,7 @@ def test_run_once_notifies_and_reviews_only_fresh_offers(tmp_path, monkeypatch, 
     bot = EditBot()
     reviewed = []
 
-    run_once(
+    run(
         Config(db=db), bot, SimpleNamespace(chats={10: None}),
         lambda url: reviewed.append(url) or Verdict("GO", "ok", url),
         providers=[FakeProvider("linkedin", [offer(7, "dev", "acme", "linkedin"), offer(8, "QA", "ACME", "linkedin")])],
@@ -157,8 +157,8 @@ def test_run_once_dedups_fetched_then_db(tmp_path, verdicts):
     provider = FakeProvider("profesia", [offer(), offer(title="Dev again")])
     review = lambda url: reviewed.append(url) or Verdict("GO", "ok", url)
 
-    run_once(Config(db=db), None, None, review, providers=[provider])
-    run_once(Config(db=db), None, None, review, providers=[provider])
+    run(Config(db=db), None, None, review, providers=[provider])
+    run(Config(db=db), None, None, review, providers=[provider])
     verdicts.shutdown(wait=True)
 
     assert reviewed == [offer().url]
@@ -174,7 +174,7 @@ def test_run_once_calls_overridden_db_dedup(tmp_path):
             return []
 
     db = tmp_path / "jobs.db"
-    run_once(Config(db=db), None, None, None, providers=[NothingNew("profesia", [offer()])])
+    run(Config(db=db), None, None, None, providers=[NothingNew("profesia", [offer()])])
 
     with closing(connect(db)) as conn:
         assert count_jobs(conn) == 0
@@ -185,7 +185,7 @@ def test_run_once_keeps_other_providers_when_one_fails(tmp_path, caplog):
     db = tmp_path / "jobs.db"
     failing = FakeProvider("profesia", error=ProfesiaError("site down"), fail_times=99)
 
-    run_once(Config(db=db), None, None, None, providers=[failing, FakeProvider("linkedin", [offer(7, source="linkedin")])])
+    run(Config(db=db), None, None, None, providers=[failing, FakeProvider("linkedin", [offer(7, source="linkedin")])])
 
     with closing(connect(db)) as conn:
         assert get_job(conn, 7, "linkedin") is not None
@@ -203,7 +203,7 @@ def test_fetch_source_retries_after_a_pause(monkeypatch, error, pause):
     monkeypatch.setattr(main.time, "sleep", pauses.append)
     provider = FakeProvider("profesia", [offer()], error=error, fail_times=1, retry=RetryPolicy(attempts=3, delay=12))
 
-    assert fetch_source(provider, lambda ids: set()) == [offer()]
+    assert fetch_source(provider) == [offer()]
     assert (provider.calls, pauses) == (2, [pause])
 
 
@@ -211,6 +211,6 @@ def test_fetch_source_retries_after_a_pause(monkeypatch, error, pause):
 def test_fetch_source_does_not_retry_a_blocked_source(caplog):
     provider = FakeProvider("profesia", error=ProfesiaBlockedError("HTTP 403"), fail_times=99)
 
-    assert fetch_source(provider, lambda ids: set()) is None
+    assert fetch_source(provider) is None
     assert provider.calls == 1
     assert "not retrying" in caplog.text

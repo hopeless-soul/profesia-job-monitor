@@ -22,7 +22,7 @@ class ProfesiaProvider(SourceProvider):
         self.config, self.session, self.retry = config, session, config.retry
 
     # Scrape every search; typed errors from scrape() propagate to fetch_source
-    def fetch(self, known) -> list[Job]:
+    def fetch(self) -> list[Job]:
         jobs: list[Job] = []
         for query in self.config.searches:
             jobs += scrape(query, source=self.name, max_pages=self.config.pages, delay=self.config.delay, session=self.session)

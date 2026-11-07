@@ -27,7 +27,7 @@ def test_build_providers_builds_listed_sources_in_order(tmp_path):
 
 # a listed provider without its file is an error that names the file
 def test_build_providers_missing_file(tmp_path):
-    with pytest.raises(ConfigError, match="providers lists 'linkedin', but .*linkedin.yaml is missing"):
+    with pytest.raises(ConfigError, match="providers lists 'linkedin': .*linkedin.yaml not found; copy linkedin.example.yaml"):
         build_providers(["linkedin"], tmp_path)
 
 

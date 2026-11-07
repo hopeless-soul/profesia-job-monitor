@@ -11,8 +11,8 @@ telegram:
   token: null               # bot token from @BotFather; null uses the TELEGRAM_BOT_TOKEN env var
   subscribers: ../subscribers.json
 
-model:
-  provider: google          # anthropic, openai or google
+model:                      # remove the section to run without verdicts
+  provider: google          # required: anthropic, openai or google
   name: gemini-3.5-flash    # null uses the provider's default model
   temperature: 0.0          # 0 gives the most consistent verdicts
   max_tokens: 8192          # keep it high: thinking models spend part of it on reasoning

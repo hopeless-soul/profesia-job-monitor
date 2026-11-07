@@ -8,7 +8,7 @@ import offer_monitor.__main__ as main
 import offer_monitor.agents.llm as llm
 import offer_monitor.agents.orchestrator as orchestrator
 from offer_monitor.__main__ import build_review, fetch_source, on_verdict, run_once
-from offer_monitor.config import Config
+from offer_monitor.config import Config, ModelConfig
 from offer_monitor.models import Job, Verdict
 from offer_monitor.providers.base import SourceProvider
 from offer_monitor.providers.profesia_sk.errors import ProfesiaBlockedError, ProfesiaError, ProfesiaRateLimitedError
@@ -103,6 +103,15 @@ def test_on_verdict_failure_only_logs(tmp_path, caplog):
     assert "verdict failed for offer 1" in caplog.text
 
 
+# no API key in config or env: verdicts are disabled with a warning, the monitor keeps going
+def test_build_review_without_api_key_disables_verdicts(tmp_path, monkeypatch, caplog):
+    (tmp_path / "backstory.md").write_text("WORK-EXPERIENCE", encoding="utf-8")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    assert build_review(Config(backstory=tmp_path / "backstory.md", model=ModelConfig(provider="anthropic"))) is None
+    assert "verdicts disabled: model.api_key: not set in config.yaml and ANTHROPIC_API_KEY is unset" in caplog.text
+
+
 # pet projects next to the backstory are appended to the text the agents get
 def test_build_review_appends_pet_projects(tmp_path, monkeypatch):
     (tmp_path / "backstory.md").write_text("WORK-EXPERIENCE", encoding="utf-8")
@@ -112,7 +121,7 @@ def test_build_review_appends_pet_projects(tmp_path, monkeypatch):
     monkeypatch.setattr(llm, "build_llm", lambda model: None)
     monkeypatch.setattr(orchestrator, "build_orchestrator", lambda _, text: seen.setdefault("text", text))
 
-    assert build_review(Config(backstory=tmp_path / "backstory.md")) is not None
+    assert build_review(Config(backstory=tmp_path / "backstory.md", model=ModelConfig(provider="anthropic"))) is not None
     assert seen["text"].startswith("WORK-EXPERIENCE")
     assert "## Pet project: A\n\nPROJECT-A" in seen["text"]
 

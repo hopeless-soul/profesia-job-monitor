@@ -12,10 +12,11 @@ ROOT = Path(__file__).parents[1]
 
 
 # the main example config is valid and lists only the Profesia source
-def test_main_example_loads(tmp_path):
+def test_main_example_loads(tmp_path, monkeypatch):
     shutil.copy(ROOT / "data" / "configs" / "config.example.yaml", tmp_path / "config.yaml")
+    monkeypatch.setattr("offer_monitor.config.CONFIG_PATH", tmp_path / "config.yaml")
 
-    config = load_config(tmp_path / "config.yaml")
+    config = load_config()
 
     # the example points at ../jobs.db, so the data folder is the copy's parent
     assert config.db.resolve() == (tmp_path / ".." / "jobs.db").resolve()
@@ -66,12 +67,18 @@ def test_profesia_file_rejects_bad_values():
             parse_profesia(data)
 
 
-# model.api_key is read from the main config, empty means "use the env var", non-strings are rejected
+# model.api_key is read from the main config, non-strings are rejected
 def test_model_api_key():
-    assert parse_main({"providers": [], "model": {"api_key": "k"}}).model.api_key == "k"
-    assert parse_main({"providers": [], "model": {"api_key": ""}}).model.api_key is None
+    assert parse_main({"providers": [], "model": {"provider": "google", "api_key": "k"}}).model.api_key == "k"
     with pytest.raises(ConfigError, match="model.api_key"):
-        parse_main({"providers": [], "model": {"api_key": 1}})
+        parse_main({"providers": [], "model": {"provider": "google", "api_key": 1}})
+
+
+# model.provider has no default; a missing model section means no verdicts
+def test_model_provider_required():
+    with pytest.raises(ConfigError, match="model.provider: Field required"):
+        parse_main({"providers": [], "model": {"api_key": "k"}})
+    assert parse_main({"providers": []}).model is None
 
 
 # the LinkedIn file: defaults fill in, and bad values or unknown keys name the field
@@ -91,10 +98,19 @@ def test_linkedin_file():
             parse_linkedin(data)
 
 
+# a missing config names itself and the example to copy
+def test_missing_config_names_the_example(tmp_path, monkeypatch):
+    monkeypatch.setattr("offer_monitor.config.CONFIG_PATH", tmp_path / "config.yaml")
+
+    with pytest.raises(ConfigError, match=r"config.yaml not found; copy config.example.yaml"):
+        load_config()
+
+
 # a YAML syntax error names the file and the line
-def test_yaml_syntax_error_names_the_line(tmp_path):
+def test_yaml_syntax_error_names_the_line(tmp_path, monkeypatch):
     path = tmp_path / "config.yaml"
     path.write_text("db: jobs.db\ninterval: [60\n", encoding="utf-8")
+    monkeypatch.setattr("offer_monitor.config.CONFIG_PATH", path)
 
     with pytest.raises(ConfigError, match=r"config.yaml: invalid YAML \(line \d+\)"):
-        load_config(path)
+        load_config()

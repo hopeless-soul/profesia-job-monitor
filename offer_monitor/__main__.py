@@ -24,7 +24,7 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 
-from .config import Config, load_config
+from .config import CONFIG_DIR, Config, load_config
 from .errors import ConfigError
 from .models import Job, Verdict
 from .providers import build_providers
@@ -48,23 +48,20 @@ from .telegram import (
     handle_updates,
     notify,
 )
-
 from .cli import build_parser
-from .globals import GREY, ORANGE, RESET, YELLOW
+
+# ANSI colors for console output only (not logs); 256-color orange, since the 16-color yellow looks more yellow than orange
+YELLOW, ORANGE, GREY, RESET = "\033[33m", "\033[38;5;208m", "\033[90m", "\033[0m"
 
 # Background workers for verdicts
 VERDICTS = ThreadPoolExecutor(max_workers=2, thread_name_prefix="verdict")
 
-# The config file, relative to the working directory
-CONFIG_PATH = Path("data/configs/config.yaml")
 
 # Load config file and build the providers it lists (each reads its own file next to it)
 def read_config(parser: argparse.ArgumentParser) -> tuple[Config, list[SourceProvider]]:
-    if not CONFIG_PATH.exists():
-        parser.error(f"{CONFIG_PATH} not found; copy config.example.yaml in that folder to config.yaml")
     try:
-        config = load_config(CONFIG_PATH)
-        return config, build_providers(config.providers, CONFIG_PATH.parent)
+        config = load_config()
+        return config, build_providers(config.providers, CONFIG_DIR)
     except ConfigError as e:
         parser.error(str(e))
 
@@ -222,6 +219,10 @@ def sync_subscribers(bot: Bot, subs: Subscribers, timeout: int = 0) -> None:
 
 # Verdict pipeline (orchestrator agent); None when langchain, the API key or the backstory is missing
 def build_review(config: Config) -> Callable[[str], Verdict] | None:
+    # no `model` section: run without verdicts
+    if config.model is None:
+        logging.warning("verdicts disabled: no `model` section in config.yaml")
+        return None
     try:
         from .agents.llm import build_llm
         from .agents.orchestrator import build_orchestrator, evaluate

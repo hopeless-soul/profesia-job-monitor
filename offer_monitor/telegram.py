@@ -18,7 +18,7 @@ from pathlib import Path
 import requests
 
 from .models import Job
-from .providers import SOURCE_LABELS
+from .providers import SOURCES
 from .store import now_iso
 
 log = logging.getLogger(__name__)
@@ -217,7 +217,9 @@ def handle_updates(bot: Bot, subs: Subscribers, timeout: int = 0) -> bool:
 
 def format_job(job: Job) -> str:
     lines = [f'<b><a href="{html.escape(job.url)}">{html.escape(job.title)}</a></b>']
-    source = SOURCE_LABELS.get(job.source, job.source)
+    # display label from the provider class; raw name for a source no longer registered (old DB rows)
+    entry = SOURCES.get(job.source)
+    source = entry[1].label if entry else job.source
     details = " · ".join(
         html.escape(x) for x in (job.company, job.location, source) if x
     )

@@ -224,7 +224,8 @@ model:
 | `interval` | `60` | Minutes between scrapes |
 | `telegram.token` | `null` | Bot token; `null` falls back to `TELEGRAM_BOT_TOKEN` |
 | `telegram.subscribers` | `../subscribers.json` | Subscriber list |
-| `model.provider` | `anthropic` | `google`, `anthropic` or `openai` |
+| `model` | `null` | No section disables verdicts (with a warning) |
+| `model.provider` | required | `google`, `anthropic` or `openai` |
 | `model.name` | `null` | `null` uses the default: `gemini-2.5-flash`, `claude-sonnet-4-5`, `gpt-4o-mini` |
 | `model.temperature` | `0.0` | 0 gives the most consistent verdicts |
 | `model.max_tokens` | `8192` | Keep it high: thinking models spend part of it on reasoning, and around 1024 the verdict gets cut off |

@@ -28,6 +28,14 @@ class SourceSettings(BaseModel):
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
 
 
+# Fail with a ConfigError if a config file is missing; names the example to copy. `context` says why the file is needed
+def require_file(path: Path, context: str = "") -> None:
+    if not path.exists():
+        prefix = f"{context}: " if context else ""
+        example = path.with_suffix(".example.yaml").name
+        raise ConfigError(f"{prefix}{path} not found; copy {example} in that folder to {path.name}")
+
+
 # Read a YAML file into a dict; an empty file is an empty dict, a syntax error names the line
 def read_yaml(path: Path) -> dict:
     try:

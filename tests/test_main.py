@@ -8,7 +8,7 @@ import profesia_monitor.__main__ as main
 from profesia_monitor.__main__ import build_review, on_verdict, run_once
 from profesia_monitor.config import Config
 from profesia_monitor.models import Job, Verdict
-from profesia_monitor.providers.profesia_sk.provider import ProfesiaError
+from profesia_monitor.providers.profesia_sk.errors import ProfesiaBlockedError, ProfesiaError, ProfesiaRateLimitedError
 from profesia_monitor.settings import RetryPolicy
 from profesia_monitor.providers.base import SourceProvider
 from profesia_monitor.store import connect, get_job, upsert_jobs
@@ -150,7 +150,7 @@ def test_run_once_keeps_other_providers_when_one_fails(tmp_path, monkeypatch, ca
     with closing(connect(db)) as conn:
         assert get_job(conn, 7, "linkedin") is not None
     assert failing.calls == 3  # all attempts used
-    assert "profesia skipped after 3 attempt(s): site down" in caplog.text
+    assert "profesia skipped after 3 attempt(s) (ProfesiaError): site down" in caplog.text
 
 
 # a source that fails once then recovers is retried, waiting the configured delay between attempts
@@ -173,3 +173,28 @@ def test_run_once_retries_a_failed_source(tmp_path, monkeypatch):
     assert pauses == [12]
     with closing(connect(db)) as conn:
         assert get_job(conn, 1, "profesia") is not None
+
+
+# a failure a retry cannot fix is tried once and not retried
+def test_fetch_source_does_not_retry_a_blocked_source(caplog):
+    provider = FakeProvider("profesia", error=ProfesiaBlockedError("HTTP 403"), fail_times=99)
+
+    assert main.fetch_source(provider, lambda ids: set()) is None
+    assert provider.calls == 1
+    assert "not retrying" in caplog.text
+
+
+# a rate limit waits the Retry-After the source asked for, capped at MAX_RETRY_WAIT
+def test_fetch_source_waits_the_retry_after(monkeypatch):
+    pauses = []
+    monkeypatch.setattr(main.time, "sleep", pauses.append)
+    provider = FakeProvider(
+        "profesia", [Job(1, "Dev", "https://www.profesia.sk/praca/x/O1", source="profesia")],
+        error=ProfesiaRateLimitedError("HTTP 429", retry_after=7), fail_times=1,
+    )
+    assert main.fetch_source(provider, lambda ids: set())
+    assert pauses == [7]
+
+    slow = FakeProvider("profesia", error=ProfesiaRateLimitedError("HTTP 429", retry_after=9999), fail_times=1)
+    main.fetch_source(slow, lambda ids: set())
+    assert pauses[-1] == main.MAX_RETRY_WAIT

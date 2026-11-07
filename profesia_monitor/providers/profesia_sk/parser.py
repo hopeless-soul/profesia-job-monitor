@@ -7,6 +7,7 @@ import re
 from bs4 import BeautifulSoup, Tag
 
 from ...models import Job, Salary
+from .errors import ProfesiaLayoutError
 
 BASE_URL = "https://www.profesia.sk"
 
@@ -93,6 +94,10 @@ def parse_row(row: Tag, source: str) -> Job | None:
 def parse_listing(html: str, source: str) -> tuple[list[Job], bool]:
     # Return (jobs on this page, whether a next page exists).
     soup = BeautifulSoup(html, "html.parser")
-    jobs = [job for row in soup.select("li.list-row") if (job := parse_row(row, source))]
+    rows = soup.select("li.list-row")
+    jobs = [job for row in rows if (job := parse_row(row, source))]
+    # rows are there but none parse: the markup changed, which is not the same as an empty search
+    if rows and not jobs:
+        raise ProfesiaLayoutError(f"{len(rows)} listing rows, none parsed: the page layout may have changed")
     has_next = soup.select_one("ul.pagination a.next") is not None
     return jobs, has_next

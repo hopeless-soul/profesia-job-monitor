@@ -5,6 +5,7 @@ env/
 
 # Python bytecode and caches
 __pycache__/
+**/__pycache__/
 *.pyc
 .pytest_cache/
 .mypy_cache/
@@ -50,3 +51,7 @@ Desktop.ini
 
 # Example configs are committed wherever they are
 !*.example.yaml
+
+# Personal design notes and local backups of old configs (they hold tokens and keys)
+docs/superpowers/
+backups/

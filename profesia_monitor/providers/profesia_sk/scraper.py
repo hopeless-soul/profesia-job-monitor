@@ -7,8 +7,11 @@ import time
 
 import requests
 
+from ...http import retry_after_seconds
 from ...models import Job
+from ..base import SourceProviderError
 from .config import Query
+from .errors import ProfesiaBlockedError, ProfesiaError, ProfesiaRateLimitedError, ProfesiaUnavailableError
 from .parser import parse_listing
 
 log = logging.getLogger(__name__)
@@ -17,6 +20,23 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
+
+
+# One listing page, or a typed error for the cause: no answer, rate limited, refused, or another HTTP error
+def _fetch_page(session: requests.Session, url: str, params: dict) -> requests.Response:
+    try:
+        resp = session.get(url, params=params, timeout=20)
+    except requests.RequestException as e:  # timeout, DNS, connection reset
+        raise ProfesiaUnavailableError(str(e)) from e
+    if resp.status_code == 429:
+        raise ProfesiaRateLimitedError("HTTP 429", retry_after=retry_after_seconds(resp))
+    if resp.status_code in (401, 403):
+        raise ProfesiaBlockedError(f"HTTP {resp.status_code}")
+    if resp.status_code >= 500:
+        raise ProfesiaUnavailableError(f"HTTP {resp.status_code}")
+    if resp.status_code >= 400:
+        raise ProfesiaError(f"HTTP {resp.status_code}")
+    return resp
 
 
 def scrape(
@@ -43,15 +63,15 @@ def scrape(
         if page > 1:
             time.sleep(delay)
         try:
-            resp = session.get(url, params=query.params(page), timeout=20)
-            resp.raise_for_status()
-        except requests.RequestException:
+            resp = _fetch_page(session, url, query.params(page))
+            page_jobs, has_next = parse_listing(resp.text, source)
+        except SourceProviderError:
+            # the first page has nothing to keep, so its failure is raised; later pages keep what they got
             if page == 1:
                 raise
             log.warning("page %d failed, keeping %d jobs", page, len(jobs), exc_info=True)
             break
 
-        page_jobs, has_next = parse_listing(resp.text, source)
         pages += 1
         fetched += len(page_jobs)
         for job in page_jobs:

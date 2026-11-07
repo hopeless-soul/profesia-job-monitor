@@ -6,7 +6,12 @@ from profesia_monitor.telegram import (
     MAX_MESSAGE_LEN,
     Bot,
     Subscribers,
+    TelegramAuthError,
+    TelegramBlockedError,
     TelegramError,
+    TelegramNetworkError,
+    TelegramRateLimitedError,
+    _telegram_error,
     format_verdict,
     handle_updates,
     notify,
@@ -26,7 +31,7 @@ class FakeBot:
 
     def send(self, chat_id, text):
         if chat_id in self.blocked:
-            raise TelegramError(403, "Forbidden: bot was blocked by the user")
+            raise TelegramBlockedError(403, "Forbidden: bot was blocked by the user")
         self.sent.append((chat_id, text))
         return len(self.sent)  # message_id
 
@@ -128,9 +133,10 @@ def test_call_gives_up_after_two_network_timeouts():
     session = FlakySession(fail_times=2)
     bot = Bot("token", session=session)
 
-    with pytest.raises(requests.exceptions.ReadTimeout):
+    with pytest.raises(TelegramNetworkError) as info:
         bot.get_updates(0, timeout=30)
     assert session.calls == 2
+    assert isinstance(info.value.__cause__, requests.exceptions.ReadTimeout)
 
 
 # chats that blocked the bot are unsubscribed
@@ -153,3 +159,13 @@ def test_format_shows_source():
     assert "ACME &lt;s.r.o.&gt; · Profesia" in format_verdict(offer)
     offer.source = "linkedin"
     assert "· LinkedIn" in format_verdict(offer)
+
+
+# the error reply's code and text pick the typed error: token, blocked chat, rate limit, anything else
+def test_error_reply_maps_to_its_class():
+    assert isinstance(_telegram_error(401, "Unauthorized", None), TelegramAuthError)
+    assert isinstance(_telegram_error(403, "Forbidden", None), TelegramBlockedError)
+    assert isinstance(_telegram_error(400, "Bad Request: chat not found", None), TelegramBlockedError)
+    rate = _telegram_error(429, "Too Many Requests", 5)
+    assert isinstance(rate, TelegramRateLimitedError) and rate.retry_after == 5
+    assert type(_telegram_error(500, "boom", None)) is TelegramError

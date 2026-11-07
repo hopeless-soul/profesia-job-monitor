@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import logging
+
 import requests
 
 from ...models import Job
-from ..base import SourceProvider, SourceProviderError
+from ..base import SourceProvider
 from .config import ProfesiaConfig
+from .errors import ProfesiaError
 from .scraper import scrape
 
+log = logging.getLogger(__name__)
 
-# Profesia failure (first page unreachable); run_once retries the source, then logs it and runs the others
-class ProfesiaError(SourceProviderError):
-    pass
+# re-exported: ProfesiaError used to be defined here
+__all__ = ["ProfesiaError", "ProfesiaProvider"]
 
 
 class ProfesiaProvider(SourceProvider):
@@ -22,14 +25,12 @@ class ProfesiaProvider(SourceProvider):
     def __init__(self, config: ProfesiaConfig, session: requests.Session | None = None):
         self.config, self.session, self.retry = config, session, config.retry
 
-    # Scrape every search; a first-page failure becomes ProfesiaError
+    # Scrape every search; typed errors from scrape() propagate to fetch_source
     def fetch(self, known) -> list[Job]:
         jobs: list[Job] = []
-        try:
-            for query in self.config.searches:
-                jobs += scrape(
-                    query, source=self.name, max_pages=self.config.pages, delay=self.config.delay, session=self.session,
-                )
-        except requests.RequestException as e:
-            raise ProfesiaError(str(e)) from e
+        for query in self.config.searches:
+            jobs += scrape(query, source=self.name, max_pages=self.config.pages, delay=self.config.delay, session=self.session)
+        # every search empty can be a quiet day, but it is also what a wrong search looks like, so say it
+        if self.config.searches and not jobs:
+            log.warning("profesia: no offers in any search; check the searches if this keeps happening")
         return jobs

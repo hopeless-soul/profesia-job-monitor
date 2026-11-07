@@ -16,6 +16,7 @@ from mcp.client.stdio import stdio_client
 
 from ...models import Job
 from ..base import SourceProvider, SourceProviderError
+from .errors import LinkedInAuthError, LinkedInError, LinkedInResponseError, LinkedInUnavailableError
 from .config import LinkedInConfig
 
 log = logging.getLogger(__name__)
@@ -31,16 +32,11 @@ JOB_URL = "https://www.linkedin.com/jobs/view/{id}/"
 # Work type lines shown under a job's header
 WORK_LABELS = {"Remote", "Hybrid", "On-site", "Full-time", "Part-time", "Contract", "Temporary", "Internship"}
 
-# MCP tool call: (tool name, arguments) -> decoded JSON result; raises LinkedInError
+# MCP tool call: (tool name, arguments) -> decoded JSON result; raises a LinkedInError subclass
 Call = Callable[[str, dict], Awaitable[dict]]
 
 # Opens an MCP session as an async context manager; tests pass a fake one
 SessionOpener = Callable[[], AbstractAsyncContextManager[ClientSession]]
-
-
-# LinkedIn failure for this run (login needed, bad reply, server did not start)
-class LinkedInError(SourceProviderError):
-    pass
 
 
 # Start the MCP server over stdio and initialise the session
@@ -96,6 +92,8 @@ async def collect(
         args = {"keywords": search.keywords, "date_posted": config.date_posted, "max_pages": config.max_pages}
         try:
             result = await call("search_jobs", args | {k: v for k, v in filters.items() if v})
+        except LinkedInAuthError:
+            raise
         except LinkedInError as e:
             log.warning("linkedin search %r failed: %s", search.keywords, e)
             continue
@@ -119,8 +117,26 @@ async def collect(
                 job_id, job.title, job.company, job.location, job.posted_text, ", ".join(job.labels) or "-",
             )
             jobs.append(job)
+        except LinkedInAuthError:
+            raise
         except (LinkedInError, KeyError, ValueError) as e:
             log.warning("linkedin job %s skipped: %s", job_id, e)
+
+
+# Error text from the server, lowercased, that means a person must act (login, captcha, verification)
+AUTH_MARKERS = ("log in", "login", "sign in", "captcha", "verification")
+# Error text that means the server is still starting up; it finishes on its own, so a retry can help
+SETUP_MARKERS = ("downloading", "setting up", "installing")
+
+
+# Typed error for a server error result, from its text
+def _error_for(text: str) -> LinkedInError:
+    lowered = text.lower()
+    if any(marker in lowered for marker in AUTH_MARKERS):
+        return LinkedInAuthError(text)
+    if any(marker in lowered for marker in SETUP_MARKERS):
+        return LinkedInUnavailableError(text)
+    return LinkedInError(text)
 
 
 # Call one MCP tool; the server reports problems (login needed, setup running) as error results
@@ -128,12 +144,12 @@ async def _call(session: ClientSession, name: str, args: dict) -> dict:
     result = await session.call_tool(name, args)
     text = "".join(getattr(c, "text", "") for c in result.content)
     if result.is_error:
-        raise LinkedInError(text)
+        raise _error_for(text)
     # a reply that is not JSON is a server problem, so it counts as a LinkedIn failure
     try:
         return json.loads(text)
     except json.JSONDecodeError as e:
-        raise LinkedInError(f"invalid reply from {name}: {e}") from e
+        raise LinkedInResponseError(f"invalid reply from {name}: {e}") from e
 
 
 class LinkedInProvider(SourceProvider):
@@ -146,7 +162,7 @@ class LinkedInProvider(SourceProvider):
         self.retry = config.retry
 
     # Blocking wrapper around one asyncio run. A timeout returns the jobs parsed so far.
-    # Any other failure to talk to the server becomes LinkedInError.
+    # Any other failure to talk to the server becomes LinkedInUnavailableError.
     def fetch(self, known: Callable[[list[int]], set[int]]) -> list[Job]:
         jobs: list[Job] = []
         try:
@@ -156,7 +172,7 @@ class LinkedInProvider(SourceProvider):
         except SourceProviderError:
             raise
         except Exception as e:
-            raise LinkedInError(f"server failed: {e}") from e
+            raise LinkedInUnavailableError(f"server failed: {e}") from e
         return jobs
 
     # Open the session, then collect

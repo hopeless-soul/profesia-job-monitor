@@ -14,3 +14,17 @@ def test_parse_listing_sets_the_given_source():
 
     other, _ = parse_listing(PAGE, "other")
     assert {j.source for j in other} == {"other"}
+
+
+# rows on the page but none parse: the layout changed, which is an error and not an empty result
+def test_changed_markup_is_a_layout_error():
+    import pytest
+    from profesia_monitor.providers.profesia_sk.errors import ProfesiaLayoutError
+
+    with pytest.raises(ProfesiaLayoutError):
+        parse_listing('<ul><li class="list-row"><span>new markup</span></li></ul>', "profesia")
+
+
+# a page with no rows at all is an empty search, not a failure
+def test_empty_page_is_not_an_error():
+    assert parse_listing("<ul></ul>", "profesia") == ([], False)

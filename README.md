@@ -60,8 +60,9 @@ data/
 │   ├── profesia_sk.yaml           Profesia.sk searches and retries        (you create this, optional)
 │   ├── linkedin.example.yaml      template for LinkedIn searches          (in the repo)
 │   └── linkedin.yaml              LinkedIn searches and retries           (you create this, optional)
-├── backstory.md                   your experience, read by the offer reviewer (you create this, optional)
-├── projects/*.md                  pet-project write-ups, added to the backstory (you create these, optional)
+├── agent_context/
+│   ├── backstory.md               your experience, read by the offer reviewer (you create this, optional)
+│   └── projects/*.md              pet-project write-ups, added to the backstory (you create these, optional)
 ├── jobs.db                        offer database                          (created on first run)
 └── subscribers.json               Telegram subscribers                    (created on first run)
 ```
@@ -116,9 +117,9 @@ $env:GOOGLE_API_KEY = "..."        # or ANTHROPIC_API_KEY / OPENAI_API_KEY
 
 **3. Add your backstory (for verdicts)**
 
-Save your experience as markdown in `data/backstory.md`: roles, stack, projects, years. The offer reviewer judges fit only from what this file says.
+Save your experience as markdown in `data/agent_context/backstory.md`: roles, stack, projects, years. The offer reviewer judges fit only from what this file says.
 
-Optionally, put one markdown file per pet project in `data/projects/` (the `projects` folder next to `backstory.md`). Every `*.md` there is appended to the backstory under a `## Pet project: <file name>` header, and the reviewer counts it as evidence, marked as a personal project.
+Optionally, put one markdown file per pet project in `data/agent_context/projects/` (the `projects` folder next to `backstory.md`). Every `*.md` there is appended to the backstory under a `## Pet project: <file name>` header, and the reviewer counts it as evidence, marked as a personal project.
 
 **4. Import old offers (only when upgrading from a `jobs.json` version)**
 
@@ -181,7 +182,7 @@ cp jobs.json data/
 docker compose run --rm --no-deps monitor python -m profesia_monitor -c /data/configs/config.yaml --import-json /data/jobs.json
 ```
 
-**2. Secrets (optional).** Copy `.env.example` to `.env` and fill in `TELEGRAM_BOT_TOKEN` and `GOOGLE_API_KEY`, unless they're already in `data/configs/config.yaml`.
+**2. Secrets (optional).** Put the bot token and API key in `data/configs/config.yaml` (`telegram.token`, `model.api_key`). If they're `null` there, the monitor reads `TELEGRAM_BOT_TOKEN` and the provider's variable (e.g. `GOOGLE_API_KEY`) from the environment.
 
 **3. Start**
 
@@ -213,7 +214,7 @@ docker compose run --rm --no-deps monitor python -m profesia_monitor -c /data/co
 
 ```yaml
 db: ../jobs.db
-backstory: ../backstory.md
+backstory: ../agent_context/backstory.md
 interval: 60
 telegram:
   token: null
@@ -229,7 +230,7 @@ model:
 | Key | Default | Meaning |
 |---|---|---|
 | `db` | `../jobs.db` | SQLite database (paths resolve against `data/configs/`, so `../` is `data/`) |
-| `backstory` | `../backstory.md` | Your experience, for the offer reviewer |
+| `backstory` | `../agent_context/backstory.md` | Your experience, for the offer reviewer |
 | `interval` | `60` | Minutes between scrapes |
 | `telegram.token` | `null` | Bot token; `null` falls back to `TELEGRAM_BOT_TOKEN` |
 | `telegram.subscribers` | `../subscribers.json` | Subscriber list |
@@ -363,6 +364,7 @@ profesia_monitor/
 ├── config.py             Main config (config.yaml) and loading the provider files
 ├── errors.py             ConfigError
 ├── settings.py           RetryPolicy and YAML loading (shared by all configs)
+├── http.py               Retry-After parsing, shared by the sources and the offer fetcher
 ├── models.py             Dataclasses: Job, Salary, Verdict
 ├── store.py              SQLite store and legacy jobs.json import
 ├── telegram.py           Bot API client, subscribers, message formatting
@@ -371,11 +373,13 @@ profesia_monitor/
 │   ├── base.py           SourceProvider base class and SourceProviderError
 │   ├── profesia_sk/      Profesia.sk source
 │   │   ├── config.py     profesia_sk.yaml: searches, pages, delay, retry
-│   │   ├── scraper.py    Query builder, HTTP fetching, pagination
+│   │   ├── errors.py     typed Profesia errors, one per cause
+    Query builder, HTTP fetching, pagination
 │   │   ├── parser.py     HTML parsing (no network)
 │   │   └── provider.py   ProfesiaProvider
 │   └── linkedin/         LinkedIn source via the LinkedIn MCP server
 │       ├── config.py     linkedin.yaml: searches, filters, delay, retry
+│       ├── errors.py     typed LinkedIn errors, one per cause
 │       └── provider.py   LinkedInProvider
 └── agents/
     ├── llm.py            Chat model from the config's `model` section
@@ -384,7 +388,7 @@ profesia_monitor/
     ├── offer_reviewer.py Subagent and its wrapper as an orchestrator tool
     └── prompts/          Agent instructions (markdown)
 tests/                    pytest suite and HTML fixtures
-Dockerfile, docker-compose.yml, .env.example
+Dockerfile, docker-compose.yml
 run-monitor.bat           Windows launcher for a local run
 ```
 
@@ -403,6 +407,12 @@ Design notes:
 | `data/configs/config.yaml not found` | Do [step 2](#option-a-run-locally), or pass `-c FILE` |
 | `config: unknown keys ['out']` | Your config predates SQLite: rename `"out": "jobs.json"` to `"db": "jobs.db"` |
 | `verdicts disabled: …` | The message names the cause: the provider package isn't installed, the API key is missing, or `backstory.md` isn't at the `backstory` path |
+| `profesia skipped after N attempt(s) (ProfesiaUnavailableError)` | Profesia could not be reached in any try. Check the connection; the next run tries again |
+| `profesia failed (ProfesiaBlockedError), not retrying` | Profesia refused the requests (401/403). The source is skipped this run; wait before running again |
+| `profesia failed (ProfesiaRateLimitedError)` | Profesia asked to slow down; the monitor waits its Retry-After (capped at 5 minutes) and tries again |
+| `profesia failed (ProfesiaLayoutError)` | Profesia changed its listing markup, so the parser finds no offers. The parser needs an update |
+| `linkedin failed (LinkedInAuthError), not retrying` | LinkedIn needs a login or a verification. Run once from a console and sign in, as in the LinkedIn section |
+| `linkedin skipped after N attempt(s) (LinkedInUnavailableError)` | The LinkedIn server did not start or stopped responding. Check `uv` is installed, then run again |
 | `verdict failed for offer …` with a JSON / structured output error | The answer was cut off; raise `model.max_tokens` (8192 works for Gemini 2.5+) |
 | Verdict tag `UNREACHABLE` | The reviewer couldn't read the offer page (expired, login wall, JS-only, or still rate-limited after 3 retries) |
 | `fetch …: HTTP 429, retrying in N s` | The site is rate-limiting page downloads; the fetch waits and retries up to 3 times |

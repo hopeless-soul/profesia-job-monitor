@@ -44,7 +44,7 @@ from .store import (
     save_verdict,
     upsert_jobs,
 )
-from .telegram import Bot, Subscribers, TelegramError, format_verdict, handle_updates, notify
+from .telegram import Bot, Subscribers, TelegramAuthError, TelegramError, format_verdict, handle_updates, notify
 
 # Runtime files (config, jobs.db, subscribers, backstory) live in data/, shared with Docker's /data volume
 DEFAULT_CONFIG = Path("data/configs/config.yaml")
@@ -207,19 +207,29 @@ def resolve_config(args: argparse.Namespace, parser: argparse.ArgumentParser) ->
         config.interval = args.interval
     return config
 
-# Fetch one source, retrying a SourceProviderError per the provider's retry policy; None when every attempt failed
+# Longest wait a source's Retry-After can buy, so one source cannot stall a run for long
+MAX_RETRY_WAIT = 300
+
+
+# Fetch one source. A retryable failure is tried again per the provider's retry policy, waiting the source's
+# Retry-After when it sent one; a failure a retry cannot fix gives up at once. None when the source gives up.
 def fetch_source(provider: SourceProvider, known: Callable[[list[int]], set[int]]) -> list[Job] | None:
     attempts, delay = provider.retry.attempts, provider.retry.delay
     for attempt in range(1, attempts + 1):
         try:
             return provider.fetch(known)
         except SourceProviderError as e:
+            kind = type(e).__name__
+            if not e.retryable:
+                logging.warning("%s failed (%s), not retrying: %s", provider.name, kind, e)
+                return None
             # the last attempt gives up; earlier ones wait and try again
             if attempt == attempts:
-                logging.warning("%s skipped after %d attempt(s): %s", provider.name, attempts, e)
+                logging.warning("%s skipped after %d attempt(s) (%s): %s", provider.name, attempts, kind, e)
                 return None
-            logging.warning("%s attempt %d of %d failed, retrying in %gs: %s", provider.name, attempt, attempts, delay, e)
-            time.sleep(delay)
+            wait = min(e.retry_after, MAX_RETRY_WAIT) if e.retry_after is not None else delay
+            logging.warning("%s attempt %d of %d failed (%s), retrying in %gs: %s", provider.name, attempt, attempts, kind, wait, e)
+            time.sleep(wait)
     return None
 
 
@@ -371,9 +381,9 @@ def main(argv: list[str] | None = None) -> int:
                 sync_subscribers(
                     bot, subs
                 )  # pick up /start and /stop sent since the last run
+            except TelegramAuthError:
+                parser.error("Telegram rejected the bot token")
             except TelegramError as e:
-                if e.code == 401:
-                    parser.error("Telegram rejected the bot token")
                 logging.warning("subscriber sync skipped: %s", e)
         run_once(config, bot, subs, review)
         # wait for pending verdicts before exiting
@@ -401,9 +411,9 @@ def main(argv: list[str] | None = None) -> int:
                     sync_subscribers(bot, subs, timeout=min(30, wait))
                 else:
                     time.sleep(wait)
+            except TelegramAuthError:
+                parser.error("Telegram rejected the bot token")
             except TelegramError as e:
-                if e.code == 401:
-                    parser.error("Telegram rejected the bot token")
                 logging.warning("%s; retrying in 30 s", e)
                 time.sleep(30)
             except Exception:

@@ -53,3 +53,18 @@ def test_retry_settings_are_read_and_validated():
         parse_profesia(base | {"retry": {"attempts": 0}})
     with pytest.raises(ConfigError, match="retry.delay"):
         parse_profesia(base | {"retry": {"delay": -1}})
+
+
+# the cause classes are both their source's error and the shared cause, and say whether a retry can help
+def test_cause_errors_combine_source_and_cause():
+    from profesia_monitor.providers.base import SourceAuthError, SourceRateLimitedError, SourceUnavailableError
+    from profesia_monitor.providers.linkedin.errors import LinkedInAuthError, LinkedInError
+    from profesia_monitor.providers.profesia_sk.errors import ProfesiaBlockedError, ProfesiaError, ProfesiaRateLimitedError, ProfesiaUnavailableError
+
+    limited = ProfesiaRateLimitedError("HTTP 429", retry_after=7)
+    assert isinstance(limited, ProfesiaError) and isinstance(limited, SourceRateLimitedError)
+    assert limited.retryable and limited.retry_after == 7
+    assert isinstance(ProfesiaUnavailableError("timeout"), SourceUnavailableError)
+    assert ProfesiaBlockedError("HTTP 403").retryable is False
+    assert LinkedInAuthError("log in").retryable is False
+    assert isinstance(LinkedInAuthError("log in"), LinkedInError) and isinstance(LinkedInAuthError("log in"), SourceAuthError)

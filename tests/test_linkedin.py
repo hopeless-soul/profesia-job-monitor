@@ -10,7 +10,8 @@ from mcp.types import CallToolResult, TextContent
 from profesia_monitor.errors import ConfigError
 from profesia_monitor.providers.linkedin import provider as linkedin
 from profesia_monitor.providers.linkedin.config import LinkedInConfig, LinkedInSearch, parse_config
-from profesia_monitor.providers.linkedin.provider import LinkedInError, LinkedInProvider, _call, collect, parse_job_details
+from profesia_monitor.providers.linkedin.errors import LinkedInAuthError, LinkedInError, LinkedInResponseError, LinkedInUnavailableError
+from profesia_monitor.providers.linkedin.provider import LinkedInProvider, _call, _error_for, collect, parse_job_details
 
 DETAILS = (Path(__file__).parent / "fixtures" / "linkedin_job_details.txt").read_text(encoding="utf-8")
 
@@ -90,7 +91,7 @@ def test_collect_reads_only_new_jobs():
 
 # one failing search is skipped; the IDs of the other searches are still read
 def test_collect_keeps_other_searches_when_one_fails():
-    search_replies = iter([reply(text="Please log in", error=True), reply({"job_ids": [5]})])
+    search_replies = iter([reply(text="Search timed out", error=True), reply({"job_ids": [5]})])
     session = FakeSession({
         "search_jobs": lambda args: next(search_replies),
         "get_job_details": lambda args: reply({"sections": {"job_posting": DETAILS}}),
@@ -178,3 +179,30 @@ def test_config_reads_linkedin_delay():
 # the mcp floor: the code reads CallToolResult.is_error, which mcp 1.x does not have
 def test_mcp_result_has_is_error_field():
     assert "is_error" in CallToolResult.model_fields
+
+
+# login text is an auth error; setup text is an unavailable server; other text is a generic LinkedIn error
+def test_server_error_text_is_classified():
+    assert isinstance(_error_for("Please log in to LinkedIn"), LinkedInAuthError)
+    assert isinstance(_error_for("Captcha required"), LinkedInAuthError)
+    assert isinstance(_error_for("Downloading the browser, please wait"), LinkedInUnavailableError)
+    generic = _error_for("Search timed out")
+    assert type(generic) is LinkedInError
+
+
+# a login prompt stops the whole LinkedIn step at once, instead of failing each search and job in turn
+def test_login_needed_stops_the_run():
+    session = FakeSession({"search_jobs": lambda args: reply(text="Please log in", error=True)})
+    config = LinkedInConfig(searches=[LinkedInSearch(keywords="a"), LinkedInSearch(keywords="b")], delay=0)
+
+    with pytest.raises(LinkedInAuthError):
+        asyncio.run(collect(partial(_call, session), "linkedin", config, 0, lambda ids: set(), []))
+    assert len(session.calls) == 1  # the second search was never tried
+
+
+# a reply that is not JSON is a response error
+def test_invalid_json_is_a_response_error():
+    session = FakeSession({"search_jobs": lambda args: reply(text="<html>not json</html>")})
+
+    with pytest.raises(LinkedInResponseError):
+        asyncio.run(_call(session, "search_jobs", {}))

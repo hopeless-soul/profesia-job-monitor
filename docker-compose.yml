@@ -1,13 +1,10 @@
-# Monitor + SQLite web viewer, sharing ./data (configs/config.yaml and the provider files, jobs.db, subscribers.json, backstory.md)
+# Monitor + SQLite web viewer, sharing ./data (configs/config.yaml and the provider files, jobs.db, subscribers.json, agent_context/)
 services:
   # scraper, Telegram bot and verdict agents
   monitor:
     build: .
     volumes:
       - ./data:/data
-    env_file:
-      - path: .env
-        required: false
     restart: unless-stopped
 
   # browse jobs.db at http://localhost:8080 (bound to localhost only; the viewer can edit the DB)

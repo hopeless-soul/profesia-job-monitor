@@ -30,9 +30,43 @@ VERDICT_EMOJI = {"GO": "🟢", "STRETCH": "🟡", "SKIP": "🔴", "UNREACHABLE":
 
 class TelegramError(RuntimeError):
     def __init__(self, code: int, description: str, retry_after: int | None = None):
-        super().__init__(f"Telegram API error {code}: {description}")
+        super().__init__(
+            f"Telegram API error {code}: {description}" if code else description
+        )
         self.code = code
         self.retry_after = retry_after
+
+
+class TelegramAuthError(TelegramError):
+    pass  # 401: the bot token is wrong or revoked
+
+
+class TelegramBlockedError(TelegramError):
+    pass  # 403, or 400 "chat not found": the chat is gone for good
+
+
+class TelegramRateLimitedError(TelegramError):
+    pass  # 429: Telegram asks us to wait retry_after seconds
+
+
+class TelegramNetworkError(TelegramError):
+    pass  # no answer from Telegram after the one retry
+
+
+# Typed Telegram error for an error reply; the code and text pick the class
+def _telegram_error(
+    code: int, description: str, retry_after: int | None
+) -> TelegramError:
+    description = description or ""
+    if code == 401:
+        cls = TelegramAuthError
+    elif code == 403 or "chat not found" in description:
+        cls = TelegramBlockedError
+    elif code == 429:
+        cls = TelegramRateLimitedError
+    else:
+        cls = TelegramError
+    return cls(code, description, retry_after)
 
 
 class Bot:
@@ -43,17 +77,25 @@ class Bot:
     def call(self, method: str, http_timeout: float = 15, **params) -> object:
         for attempt in range(2):
             try:
-                resp = self.session.post(API_URL.format(token=self.token, method=method), json=params, timeout=http_timeout)
+                resp = self.session.post(
+                    API_URL.format(token=self.token, method=method),
+                    json=params,
+                    timeout=http_timeout,
+                )
             except requests.exceptions.RequestException as e:
                 if attempt == 0:
                     log.warning("%s request failed (%s), retrying", method, e)
                     continue
-                raise
+                raise TelegramNetworkError(0, str(e)) from e
             data = resp.json()
             if data.get("ok"):
                 return data["result"]
             retry_after = (data.get("parameters") or {}).get("retry_after")
-            error = TelegramError(data.get("error_code", resp.status_code), data.get("description", ""), retry_after)
+            error = _telegram_error(
+                data.get("error_code", resp.status_code),
+                data.get("description", ""),
+                retry_after,
+            )
             if error.code == 429 and retry_after and attempt == 0:
                 log.warning("rate limited, retrying in %ss", retry_after)
                 time.sleep(retry_after)
@@ -63,19 +105,35 @@ class Bot:
 
     def get_updates(self, offset: int, timeout: int = 0) -> list[dict]:
         """Long-polls for up to `timeout` seconds (0 = return immediately)."""
-        return self.call("getUpdates", http_timeout=timeout + 10, offset=offset, timeout=timeout,
-                         allowed_updates=["message"])
+        return self.call(
+            "getUpdates",
+            http_timeout=timeout + 10,
+            offset=offset,
+            timeout=timeout,
+            allowed_updates=["message"],
+        )
 
     # send an HTML message; returns its message_id
     def send(self, chat_id: int, text: str) -> int:
-        result = self.call("sendMessage", chat_id=chat_id, text=text, parse_mode="HTML",
-                           link_preview_options={"is_disabled": True})
+        result = self.call(
+            "sendMessage",
+            chat_id=chat_id,
+            text=text,
+            parse_mode="HTML",
+            link_preview_options={"is_disabled": True},
+        )
         return result["message_id"]
 
     # replace the text of a message sent earlier
     def edit(self, chat_id: int, message_id: int, text: str) -> None:
-        self.call("editMessageText", chat_id=chat_id, message_id=message_id, text=text, parse_mode="HTML",
-                  link_preview_options={"is_disabled": True})
+        self.call(
+            "editMessageText",
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="HTML",
+            link_preview_options={"is_disabled": True},
+        )
 
 
 @dataclass
@@ -100,9 +158,14 @@ class Subscribers:
         return cls(path, data.get("offset", 0), {s.chat_id: s for s in subs})
 
     def save(self) -> None:
-        data = {"offset": self.offset, "subscribers": [asdict(s) for s in self.chats.values()]}
+        data = {
+            "offset": self.offset,
+            "subscribers": [asdict(s) for s in self.chats.values()],
+        }
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=self.path.name, suffix=".tmp")
+        fd, tmp = tempfile.mkstemp(
+            dir=self.path.parent, prefix=self.path.name, suffix=".tmp"
+        )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -133,7 +196,9 @@ def handle_updates(bot: Bot, subs: Subscribers, timeout: int = 0) -> bool:
             continue
         if cmd == "/start":
             if chat_id not in subs.chats:
-                name = chat.get("username") or chat.get("title") or chat.get("first_name")
+                name = (
+                    chat.get("username") or chat.get("title") or chat.get("first_name")
+                )
                 subs.chats[chat_id] = Subscriber(chat_id, name, now_iso())
                 log.info("subscribed %s (%s)", chat_id, name)
             reply = "Subscribed. You will get new Profesia.sk and LinkedIn offers here. Send /stop to unsubscribe."
@@ -153,7 +218,9 @@ def handle_updates(bot: Bot, subs: Subscribers, timeout: int = 0) -> bool:
 def format_job(job: Job) -> str:
     lines = [f'<b><a href="{html.escape(job.url)}">{html.escape(job.title)}</a></b>']
     source = SOURCE_LABELS.get(job.source, job.source)
-    details = " · ".join(html.escape(x) for x in (job.company, job.location, source) if x)
+    details = " · ".join(
+        html.escape(x) for x in (job.company, job.location, source) if x
+    )
     if details:
         lines.append(details)
     if job.salary:
@@ -184,7 +251,9 @@ def format_verdict(job: Job) -> str:
 
 # Send each offer as its own message to every subscriber.
 # Drops chats that blocked the bot. Returns (subs changed, {offer uuid: {chat_id: message_id}}).
-def notify(bot: Bot, subs: Subscribers, jobs: list[Job]) -> tuple[bool, dict[str, dict[int, int]]]:
+def notify(
+    bot: Bot, subs: Subscribers, jobs: list[Job]
+) -> tuple[bool, dict[str, dict[int, int]]]:
     sent: dict[str, dict[int, int]] = {}
     if not jobs or not subs.chats:
         return False, sent
@@ -196,14 +265,17 @@ def notify(bot: Bot, subs: Subscribers, jobs: list[Job]) -> tuple[bool, dict[str
             if i:
                 time.sleep(1)  # Telegram allows ~1 message/second per chat
             try:
-                sent.setdefault(job.uuid, {})[chat_id] = bot.send(chat_id, format_job(job))
+                sent.setdefault(job.uuid, {})[chat_id] = bot.send(
+                    chat_id, format_job(job)
+                )
+            except TelegramBlockedError as e:
+                # blocked, kicked or chat gone: unsubscribe
+                log.warning("removing subscriber %s: %s", chat_id, e)
+                del subs.chats[chat_id]
+                changed = True
+                break
             except TelegramError as e:
-                # blocked, kicked or chat gone: unsubscribe; other errors: skip this chat for now
-                if e.code == 403 or "chat not found" in str(e):
-                    log.warning("removing subscriber %s: %s", chat_id, e)
-                    del subs.chats[chat_id]
-                    changed = True
-                else:
-                    log.warning("send to %s failed: %s", chat_id, e)
+                # any other failure: skip this chat for now
+                log.warning("send to %s failed: %s", chat_id, e)
                 break
     return changed, sent

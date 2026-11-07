@@ -21,7 +21,7 @@ def test_main_example_loads_with_both_sources_off(tmp_path):
 
     # the example points at ../jobs.db, so the data folder is the copy's parent
     assert config.db.resolve() == (tmp_path / ".." / "jobs.db").resolve()
-    assert config.backstory.resolve() == (tmp_path / ".." / "backstory.md").resolve()
+    assert config.backstory.resolve() == (tmp_path / ".." / "agent_context" / "backstory.md").resolve()
     assert config.profesia is None
     assert config.linkedin is None
     assert config.model.api_key is None

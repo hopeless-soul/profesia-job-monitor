@@ -10,6 +10,7 @@ import requests
 from bs4 import BeautifulSoup
 from langchain_core.tools import tool
 
+from ..http import retry_after_seconds
 from ..providers.profesia_sk.scraper import USER_AGENT
 
 MAX_PAGE_CHARS = 20_000  # keeps one page well inside the model's context
@@ -22,14 +23,6 @@ MAX_RETRY_AFTER = 120  # cap on a server's Retry-After, so one review can't stal
 log = logging.getLogger(__name__)
 
 
-# Seconds from a Retry-After header in its seconds form; None when missing or an HTTP date
-def _retry_after(resp: requests.Response) -> float | None:
-    try:
-        return max(0.0, float(resp.headers["Retry-After"]))
-    except (KeyError, ValueError):
-        return None
-
-
 # GET with retries on RETRY_STATUSES: waits Retry-After or the next backoff step, plus jitter so
 # the two verdict workers don't retry in step; returns the last response when retries run out
 def _get(url: str) -> requests.Response:
@@ -37,7 +30,7 @@ def _get(url: str) -> requests.Response:
         resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=20)
         if resp.status_code not in RETRY_STATUSES or delay is None:
             return resp
-        wait = min(_retry_after(resp) or delay, MAX_RETRY_AFTER) + random.uniform(0, delay / 2)
+        wait = min(retry_after_seconds(resp) or delay, MAX_RETRY_AFTER) + random.uniform(0, delay / 2)
         log.warning("fetch %s: HTTP %d, retrying in %.0f s", url, resp.status_code, wait)
         time.sleep(wait)
     raise AssertionError("unreachable")

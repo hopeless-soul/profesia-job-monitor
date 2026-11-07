@@ -10,9 +10,12 @@ from ..models import Job
 from ..settings import RetryPolicy
 
 
-# Base error for a source that failed this run; fetch_source retries it when retryable, then logs it and moves on
 class SourceProviderError(RuntimeError):
-    # whether a retry can help; causes that a retry cannot fix set this to False
+    """
+    Base error for a source that failed this run;
+    fetch_source retries it when retryable;
+    """
+
     retryable: ClassVar[bool] = True
 
     def __init__(self, message: str = "", *, retry_after: float | None = None):
@@ -21,58 +24,74 @@ class SourceProviderError(RuntimeError):
         self.retry_after = retry_after
 
 
-# The source did not answer: connection failed, timed out, returned 5xx, or the server did not start
+# The source did not answer:
+# connection_failed, timed_out, returned_5xx, or the server did not start;
 class SourceUnavailableError(SourceProviderError):
     pass
 
 
-# HTTP 429: the source asks us to slow down; retry_after carries the wait it asked for
+# HTTP 429: rate limit;
 class SourceRateLimitedError(SourceProviderError):
     pass
 
 
-# The source replied, but not in a usable shape (invalid JSON, missing fields)
+# The source replied, but not in a usable shape (invalid JSON, missing fields);
 class SourceResponseError(SourceProviderError):
     pass
 
 
-# HTTP 401/403 or an anti-bot page: a retry gets the same answer
+# HTTP 401/403 or an anti-bot page;
 class SourceBlockedError(SourceProviderError):
     retryable = False
 
 
-# Login or verification is required; only a person can fix that
+# Login or verification is required;
 class SourceAuthError(SourceProviderError):
     retryable = False
 
 
-# The page structure changed and nothing parses; a retry sees the same page
+# The page structure changed;
 class SourceLayoutError(SourceProviderError):
     retryable = False
 
 
-# Base class for job sources
 class SourceProvider(ABC):
-    # Written to Job.source and the offers table; set once per provider
+    """
+    Abstract Base Class
+    """
+
     name: ClassVar[str]
-    # Shown in Telegram messages
     label: ClassVar[str]
-    # Retry settings used by fetch_source (called from run_once) when fetch() raises SourceProviderError
     retry: RetryPolicy = RetryPolicy()
 
-    # Offers found this run, each with source=self.name. `known(ids)` returns the IDs already stored;
-    # a source may use it to skip costly per-offer reads. Raises SourceProviderError when the source failed for this run.
     @abstractmethod
-    def fetch(self, known: Callable[[list[int]], set[int]]) -> list[Job]: ...
+    def fetch(self, known: Callable[[list[int]], set[int]]) -> list[Job]:
+        """
+        Return the offers found this run;
+        `known(ids)` returns IDs already stored in the database. use it to skip costly per-offer reads for those.
 
-    # Drop repeats among this run's offers (the same offer can match several searches); keeps the first copy, in order
+        Each offer has `source=self.name`;
+
+        Raise `SourceProviderError` if the source failed this run;
+        """
+        ...
+
     def dedup_fetched(self, jobs: list[Job]) -> list[Job]:
+        """
+        Dedup offers among the run; keeps the first copy, in order
+        """
         first: dict[tuple[str, int], Job] = {}
         for job in jobs:
+            # NOTE: `first[key] = job` Saves the last copy; `.setdefault` will save the first copy;
             first.setdefault((job.source, job.id), job)
         return list(first.values())
 
-    # Offers not stored yet; `known(ids)` returns the IDs already stored. Runs after every source has fetched.
-    def db_dedup(self, jobs: list[Job], known: Callable[[list[int]], set[int]]) -> list[Job]:
+    def db_dedup(
+        self, jobs: list[Job], known: Callable[[list[int]], set[int]]
+    ) -> list[Job]:
+        """
+        Dedup offers against the database; keeps the first copy, in order. Offers not stored yet;
+         `known(ids)` returns the IDs already stored. Runs after every source has fetched.
+        """
         stored = known([job.id for job in jobs])
         return [job for job in jobs if job.id not in stored]

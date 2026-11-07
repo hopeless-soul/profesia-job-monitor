@@ -41,6 +41,7 @@ backstory.md
 # Editors and IDEs
 .idea/
 .vscode/
+.claude/
 
 # OS files
 Thumbs.db

@@ -85,7 +85,14 @@ class Bot:
                     log.warning("%s request failed (%s), retrying", method, reason)
                     continue
                 raise TelegramNetworkError(0, reason) from None
-            data = resp.json()
+            # a gateway error page (e.g. HTML 502) is not a Telegram answer; retry once like a network error
+            try:
+                data = resp.json()
+            except ValueError:
+                if attempt == 0:
+                    log.warning("%s got a non-JSON reply (HTTP %s), retrying", method, resp.status_code)
+                    continue
+                raise TelegramNetworkError(resp.status_code, "non-JSON reply") from None
             if data.get("ok"):
                 return data["result"]
             retry_after = (data.get("parameters") or {}).get("retry_after")

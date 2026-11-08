@@ -148,6 +148,34 @@ def test_call_retries_a_network_timeout_once():
     assert session.calls == 2
 
 
+# Session stand-in whose first `bad_times` posts get an HTML gateway page, then succeed
+class GatewayErrorSession:
+    def __init__(self, bad_times):
+        self.bad_times = bad_times
+        self.calls = 0
+
+    def post(self, *args, **kwargs):
+        self.calls += 1
+        if self.calls <= self.bad_times:
+            def not_json():
+                raise requests.exceptions.JSONDecodeError("Expecting value", "<html>502</html>", 0)
+            return SimpleNamespace(status_code=502, json=not_json)
+        return SimpleNamespace(status_code=200, json=lambda: {"ok": True, "result": []})
+
+
+# one non-JSON reply is retried; a second one is raised as a TelegramError callers already catch
+def test_call_retries_a_non_json_reply_once():
+    session = GatewayErrorSession(bad_times=1)
+    assert Bot("token", session=session).get_updates(0) == []
+    assert session.calls == 2
+
+    session = GatewayErrorSession(bad_times=2)
+    with pytest.raises(TelegramNetworkError) as err:
+        Bot("token", session=session).get_updates(0)
+    assert err.value.code == 502
+    assert session.calls == 2
+
+
 # a network error's URL contains the token; it must not reach the error text, its cause, or the log
 def test_network_error_hides_the_token(caplog):
     session = FlakySession(fail_times=2, message="Max retries exceeded with url: /botSECRET/getUpdates")

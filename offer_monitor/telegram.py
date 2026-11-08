@@ -30,9 +30,7 @@ VERDICT_EMOJI = {"GO": "🟢", "STRETCH": "🟡", "SKIP": "🔴", "UNREACHABLE":
 
 class TelegramError(RuntimeError):
     def __init__(self, code: int, description: str, retry_after: int | None = None):
-        super().__init__(
-            f"Telegram API error {code}: {description}" if code else description
-        )
+        super().__init__(f"Telegram API error {code}: {description}" if code else description)
         self.code = code
         self.retry_after = retry_after
 
@@ -54,9 +52,7 @@ class TelegramNetworkError(TelegramError):
 
 
 # Typed Telegram error for an error reply; the code and text pick the class
-def _telegram_error(
-    code: int, description: str, retry_after: int | None
-) -> TelegramError:
+def _telegram_error(code: int, description: str, retry_after: int | None) -> TelegramError:
     description = description or ""
     if code == 401:
         cls = TelegramAuthError
@@ -163,9 +159,7 @@ class Subscribers:
             "subscribers": [asdict(s) for s in self.chats.values()],
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(
-            dir=self.path.parent, prefix=self.path.name, suffix=".tmp"
-        )
+        fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=self.path.name, suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -196,9 +190,7 @@ def handle_updates(bot: Bot, subs: Subscribers, timeout: int = 0) -> bool:
             continue
         if cmd == "/start":
             if chat_id not in subs.chats:
-                name = (
-                    chat.get("username") or chat.get("title") or chat.get("first_name")
-                )
+                name = chat.get("username") or chat.get("title") or chat.get("first_name")
                 subs.chats[chat_id] = Subscriber(chat_id, name, now_iso())
                 log.info("subscribed %s (%s)", chat_id, name)
             reply = "Subscribed. You will get new Profesia.sk and LinkedIn offers here. Send /stop to unsubscribe."
@@ -220,9 +212,7 @@ def format_job(job: Job) -> str:
     # display label from the provider class; raw name for a source no longer registered (old DB rows)
     entry = SOURCES.get(job.source)
     source = entry[1].label if entry else job.source
-    details = " · ".join(
-        html.escape(x) for x in (job.company, job.location, source) if x
-    )
+    details = " · ".join(html.escape(x) for x in (job.company, job.location, source) if x)
     if details:
         lines.append(details)
     if job.salary:
@@ -253,9 +243,7 @@ def format_verdict(job: Job) -> str:
 
 # Send each offer as its own message to every subscriber.
 # Drops chats that blocked the bot. Returns (subs changed, {offer uuid: {chat_id: message_id}}).
-def notify(
-    bot: Bot, subs: Subscribers, jobs: list[Job]
-) -> tuple[bool, dict[str, dict[int, int]]]:
+def notify(bot: Bot, subs: Subscribers, jobs: list[Job]) -> tuple[bool, dict[str, dict[int, int]]]:
     sent: dict[str, dict[int, int]] = {}
     if not jobs or not subs.chats:
         return False, sent
@@ -267,9 +255,7 @@ def notify(
             if i:
                 time.sleep(1)  # Telegram allows ~1 message/second per chat
             try:
-                sent.setdefault(job.uuid, {})[chat_id] = bot.send(
-                    chat_id, format_job(job)
-                )
+                sent.setdefault(job.uuid, {})[chat_id] = bot.send(chat_id, format_job(job))
             except TelegramBlockedError as e:
                 # blocked, kicked or chat gone: unsubscribe
                 log.warning("removing subscriber %s: %s", chat_id, e)

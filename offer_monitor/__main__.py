@@ -28,6 +28,7 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 
+from .agents import AGENT
 from .config import CONFIG_DIR, Config, load_config
 from .errors import ConfigError
 from .models import Job, Verdict
@@ -162,7 +163,7 @@ def run(
     # print new offers and totals
     for job in added:
         salary = job.salary.raw if job.salary else "-"
-        print(f"\n{YELLOW}NEW {job.source} {job.id}  {job.title} | {job.company} | {salary}{RESET}")
+        print(f"{YELLOW}NEW {job.source} {job.id}  {job.title} | {job.company} | {salary}{RESET}")
     # summary line in orange, then a blank line
     print(f"{ORANGE}Scraped {scraped}, new {len(added)}, dup {dups}, total {total} in {config.db}{RESET}")
     print()
@@ -285,9 +286,21 @@ def main(argv: list[str] | None = None) -> int:
     # log lines get a grey timestamp in brackets, same format as the run header
     logging.basicConfig(
         level=logging.INFO if args.verbose else logging.WARNING,
-        format=f"{GREY}[%(asctime)s]{RESET} %(levelname)s %(message)s",
+        format=f"{GREY}[%(asctime)s]{RESET} %(levelname)s %(agent)s%(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
+
+    # tag each record with the agent running in this thread (empty outside the verdict pipeline);
+    # a record factory, not `extra=`, because the httpx lines come from library code we don't call
+    make_record = logging.getLogRecordFactory()
+
+    def record_with_agent(*args, **kwargs):
+        record = make_record(*args, **kwargs)
+        name = AGENT.get()
+        record.agent = f"[{name}] " if name else ""
+        return record
+
+    logging.setLogRecordFactory(record_with_agent)
 
     """
     Load configs

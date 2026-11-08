@@ -3,7 +3,7 @@ import json
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 
-from offer_monitor.agents import offer_reviewer
+from offer_monitor.agents import AGENT, offer_reviewer
 from offer_monitor.agents.offer_reviewer import as_tool, system_prompt
 from offer_monitor.agents.orchestrator import build_orchestrator, evaluate
 from offer_monitor.models import Verdict
@@ -69,6 +69,7 @@ def test_reviewer_tool_passes_url_and_returns_json():
     class StubReviewer:
         def invoke(self, state):
             self.state = state
+            self.agent = AGENT.get()
             return {"structured_response": offer_reviewer.Verdict(**VERDICT)}
 
     reviewer = StubReviewer()
@@ -77,6 +78,30 @@ def test_reviewer_tool_passes_url_and_returns_json():
 
     assert reviewer.state == {"messages": [{"role": "user", "content": URL}]}
     assert json.loads(out) == VERDICT
+    # the log tag is set during the run and cleared after it
+    assert reviewer.agent == "offer_reviewer"
+    assert AGENT.get() == ""
+
+
+# every model call is tagged with the agent that made it, across LangGraph's worker threads
+def test_model_calls_are_tagged_with_agent_name():
+    seen = []
+
+    class RecordingModel(ScriptedModel):
+        def _generate(self, *args, **kwargs):
+            seen.append(AGENT.get())
+            return super()._generate(*args, **kwargs)
+
+    llm = RecordingModel(messages=iter([
+        call("offer_reviewer", {"url": URL}, "1"),  # orchestrator delegates
+        call("Verdict", VERDICT, "2"),  # reviewer answers
+        call("Verdict", VERDICT, "3"),  # orchestrator relays
+    ]))
+
+    evaluate(build_orchestrator(llm, "backstory"), URL)
+
+    assert seen == ["orchestrator", "offer_reviewer", "orchestrator"]
+    assert AGENT.get() == ""
 
 
 # the reviewer prompt carries its duties, the research method and the backstory

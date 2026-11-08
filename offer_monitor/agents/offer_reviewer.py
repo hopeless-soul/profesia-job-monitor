@@ -12,6 +12,7 @@ from langchain_core.tools import BaseTool, tool
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field, StringConstraints
 
+from . import AGENT
 from .tools import fetch_offer
 
 PROMPTS = Path(__file__).parent / "prompts"
@@ -67,8 +68,12 @@ def as_tool(reviewer: CompiledStateGraph) -> BaseTool:
         "Returns the verdict as JSON with tag, content and url.",
     )
     def review_offer(url: str) -> str:
-        # run the subagent with the URL as its only message
-        result = reviewer.invoke({"messages": [{"role": "user", "content": url}]})
+        # run the subagent with the URL as its only message; its log lines are tagged with its name
+        token = AGENT.set("offer_reviewer")
+        try:
+            result = reviewer.invoke({"messages": [{"role": "user", "content": url}]})
+        finally:
+            AGENT.reset(token)
         return result["structured_response"].model_dump_json()
 
     return review_offer

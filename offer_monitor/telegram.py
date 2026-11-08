@@ -79,10 +79,12 @@ class Bot:
                     timeout=http_timeout,
                 )
             except requests.exceptions.RequestException as e:
+                # the request URL holds the bot token; keep it out of logs and tracebacks
+                reason = str(e).replace(self.token, "<token>")
                 if attempt == 0:
-                    log.warning("%s request failed (%s), retrying", method, e)
+                    log.warning("%s request failed (%s), retrying", method, reason)
                     continue
-                raise TelegramNetworkError(0, str(e)) from e
+                raise TelegramNetworkError(0, reason) from None
             data = resp.json()
             if data.get("ok"):
                 return data["result"]

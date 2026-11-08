@@ -39,14 +39,15 @@ class FakeBot:
 
 # Session stand-in whose first `fail_times` posts time out, then succeed
 class FlakySession:
-    def __init__(self, fail_times):
+    def __init__(self, fail_times, message="timed out"):
         self.fail_times = fail_times
+        self.message = message
         self.calls = 0
 
     def post(self, *args, **kwargs):
         self.calls += 1
         if self.calls <= self.fail_times:
-            raise requests.exceptions.ReadTimeout("timed out")
+            raise requests.exceptions.ReadTimeout(self.message)
         return SimpleNamespace(json=lambda: {"ok": True, "result": []})
 
 
@@ -145,6 +146,16 @@ def test_call_retries_a_network_timeout_once():
     with pytest.raises(TelegramNetworkError):
         Bot("token", session=session).get_updates(0)
     assert session.calls == 2
+
+
+# a network error's URL contains the token; it must not reach the error text, its cause, or the log
+def test_network_error_hides_the_token(caplog):
+    session = FlakySession(fail_times=2, message="Max retries exceeded with url: /botSECRET/getUpdates")
+    with pytest.raises(TelegramNetworkError) as err:
+        Bot("SECRET", session=session).get_updates(0)
+    assert "SECRET" not in str(err.value)
+    assert err.value.__cause__ is None
+    assert "SECRET" not in caplog.text
 
 
 # the error reply's code and text pick the typed error: token, blocked chat, rate limit, anything else

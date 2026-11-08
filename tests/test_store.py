@@ -15,6 +15,7 @@ from offer_monitor.store import (
     refresh_known,
     release_lease,
     renew_lease,
+    save_message_ids,
     save_verdict,
     store_new,
 )
@@ -132,6 +133,9 @@ def test_old_database_is_migrated(tmp_path):
     stored = get_job(conn, 1, "profesia")
     assert (stored.uuid, stored.source, stored.verdict.tag) == ("u1", "profesia", "GO")
     assert [tuple(r) for r in conn.execute("SELECT * FROM offer_messages")] == [("u1", 10, 100)]
+    # the old offer_uuid key is renamed, so new message ids can be saved next to the old ones
+    save_message_ids(conn, "u1", {20: 200})
+    assert [tuple(r) for r in conn.execute("SELECT offer_id, chat_id FROM offer_messages")] == [("u1", 10), ("u1", 20)]
     # the new key allows the same ID on another source, and the messages table still links to offers
     store_new(conn, [job(1, source="linkedin")], seen_at=T1)
     assert "REFERENCES offers(" in conn.execute("SELECT sql FROM sqlite_master WHERE name = 'offer_messages'").fetchone()[0]

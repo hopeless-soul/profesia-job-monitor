@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
+from typing import Annotated, Literal
 
 from langchain.agents import create_agent
+from langchain.agents.structured_output import ToolStrategy
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool, tool
 from langgraph.graph.state import CompiledStateGraph
+from pydantic import BaseModel, Field, StringConstraints
 
 from .tools import fetch_offer
 
@@ -21,25 +23,22 @@ LANGUAGE_RULE = (
     "or the backstory. Keep company names, job titles and quoted requirements as written."
 )
 
-# Structured answer of the reviewer and the orchestrator (same fields as models.Verdict)
-VERDICT_SCHEMA = {
-    "title": "Verdict",
-    "description": "Verdict on one job offer.",
-    "type": "object",
-    "properties": {
-        "tag": {
-            "type": "string",
-            "enum": ["GO", "STRETCH", "SKIP", "UNREACHABLE"],
-            "description": "GO, STRETCH or SKIP per the rating rules; UNREACHABLE when the offer page could not be read.",
-        },
-        "content": {
-            "type": "string",
-            "description": "Plain-text review report (no markdown), at most 3000 characters.",
-        },
-        "url": {"type": "string", "description": "URL of the reviewed offer."},
-    },
-    "required": ["tag", "content", "url"],
-}
+# Structured answer of the reviewer and the orchestrator (same fields as models.Verdict).
+# Pydantic, not a dict schema: LangChain only validates typed schemas
+class Verdict(BaseModel):
+    """Verdict on one job offer."""
+
+    tag: Literal["GO", "STRETCH", "SKIP", "UNREACHABLE"] = Field(
+        description="GO, STRETCH or SKIP per the rating rules; UNREACHABLE when the offer page could not be read."
+    )
+    content: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] = Field(
+        description="Plain-text review report (no markdown), at most 3000 characters."
+    )
+    url: str = Field(description="URL of the reviewed offer.")
+
+
+# Tool-call output; an invalid answer is sent back to the model with the error so it can fix it
+VERDICT_FORMAT = ToolStrategy(Verdict)
 
 
 # System prompt: duties and steps, research method, output language, then the backstory
@@ -55,7 +54,7 @@ def build_offer_reviewer(llm: BaseChatModel, backstory: str) -> CompiledStateGra
         llm,
         tools=[fetch_offer],
         system_prompt=system_prompt(backstory),
-        response_format=VERDICT_SCHEMA,
+        response_format=VERDICT_FORMAT,
         name="offer_reviewer",
     )
 
@@ -70,6 +69,6 @@ def as_tool(reviewer: CompiledStateGraph) -> BaseTool:
     def review_offer(url: str) -> str:
         # run the subagent with the URL as its only message
         result = reviewer.invoke({"messages": [{"role": "user", "content": url}]})
-        return json.dumps(result["structured_response"], ensure_ascii=False)
+        return result["structured_response"].model_dump_json()
 
     return review_offer

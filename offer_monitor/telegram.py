@@ -1,17 +1,16 @@
 # Telegram notifications. Users subscribe with /start and unsubscribe with /stop.
 #
 # Uses long polling (getUpdates), so no webhook or public server is needed.
-# subscribers.json keeps the chat list plus the update offset, so each command
-# is handled once.
+# The database (subscribers and telegram_state tables) keeps the chat list plus the
+# update offset, so each command is handled once.
 
 from __future__ import annotations
 
 import html
 import json
 import logging
-import os
-import tempfile
 import time
+from contextlib import closing
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -19,7 +18,7 @@ import requests
 
 from .models import Job
 from .providers import SOURCES
-from .store import now_iso
+from .store import connect, load_subscribers, now_iso, save_subscribers
 
 log = logging.getLogger(__name__)
 
@@ -150,33 +149,33 @@ class Subscriber:
 
 @dataclass
 class Subscribers:
-    path: Path
+    db: Path
     offset: int = 0
     chats: dict[int, Subscriber] = field(default_factory=dict)
 
+    # Read subscribers from the database; on a database that never saved any,
+    # import them once from the old subscribers.json (`legacy`) when it exists
     @classmethod
-    def load(cls, path: Path) -> Subscribers:
-        if not path.exists():
-            return cls(path)
-        data = json.loads(path.read_text(encoding="utf-8"))
-        subs = [Subscriber(**s) for s in data.get("subscribers", [])]
-        return cls(path, data.get("offset", 0), {s.chat_id: s for s in subs})
+    def load(cls, db: Path, legacy: Path | None = None) -> Subscribers:
+        with closing(connect(db)) as conn:
+            offset, rows = load_subscribers(conn)
+        if offset is not None:
+            return cls(db, offset, {r["chat_id"]: Subscriber(**r) for r in rows})
+        if legacy is None or not legacy.exists():
+            return cls(db)
 
+        # one-time import; the saved offset row marks it done, so the file is never read again
+        data = json.loads(legacy.read_text(encoding="utf-8"))
+        subs = [Subscriber(**s) for s in data.get("subscribers", [])]
+        imported = cls(db, data.get("offset", 0), {s.chat_id: s for s in subs})
+        imported.save()
+        log.warning("imported %d subscriber(s) from %s into %s; that file is no longer used", len(subs), legacy, db)
+        return imported
+
+    # Write the chat list and offset in one transaction
     def save(self) -> None:
-        data = {
-            "offset": self.offset,
-            "subscribers": [asdict(s) for s in self.chats.values()],
-        }
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=self.path.name, suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-                f.write("\n")
-            os.replace(tmp, self.path)
-        except BaseException:
-            os.unlink(tmp)
-            raise
+        with closing(connect(self.db)) as conn, conn:
+            save_subscribers(conn, self.offset, [asdict(s) for s in self.chats.values()])
 
 
 def _command(text: str) -> str:
@@ -243,9 +242,13 @@ def format_verdict(job: Job) -> str:
     room = MAX_MESSAGE_LEN - len(text) - len("\n<blockquote expandable></blockquote>")
     content = job.verdict.content.strip()
     if len(html.escape(content)) > room:
-        content = content[: room - 1]
-        while len(html.escape(content)) > room - 1:
+        # stop at empty: a header near the limit leaves room <= 1 and must not loop forever
+        content = content[: max(room - 1, 0)]
+        while content and len(html.escape(content)) > room - 1:
             content = content[:-100]
+        # no room left for the report: send the header alone
+        if not content:
+            return text
         content += "…"
     return f"{text}\n<blockquote expandable>{html.escape(content)}</blockquote>"
 

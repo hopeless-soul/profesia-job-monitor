@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # application code, including agents/prompts
 COPY offer_monitor/ offer_monitor/
 
-# configs/ (config.yaml and the provider files), jobs.db, subscribers.json and agent_context/ (backstory.md, projects/)
+# configs/ (config.yaml and the provider files), jobs.db (offers and Telegram subscribers) and agent_context/ (backstory.md, projects/)
 # live in the mounted volume at /app/data, the data/ folder next to the code where the app looks for its config
 VOLUME /app/data
 CMD ["python", "-m", "offer_monitor", "-v"]

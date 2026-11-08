@@ -325,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
         bot = subs = None
         token = config.telegram.token
         if token and not args.no_notify:
-            bot, subs = Bot(token), Subscribers.load(config.telegram.subscribers)
+            bot, subs = Bot(token), Subscribers.load(config.db, legacy=config.telegram.subscribers)
 
         """
         Verdict pipeline setup

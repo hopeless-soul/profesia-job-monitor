@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -66,7 +67,7 @@ def job(i, title="Frontend developer"):
 
 # subscribers for chats 1 and 2, made through /start like real ones
 def two_subscribers(bot, tmp_path):
-    subs = Subscribers.load(tmp_path / "subscribers.json")
+    subs = Subscribers.load(tmp_path / "jobs.db")
     bot.updates = [message(1, 1, "/start"), message(2, 2, "/start")]
     handle_updates(bot, subs)
     bot.sent.clear()
@@ -75,18 +76,41 @@ def two_subscribers(bot, tmp_path):
 
 # /start and /stop update subscribers, and each update is handled once
 def test_start_and_stop_update_subscribers_once(tmp_path):
-    path = tmp_path / "subscribers.json"
-    subs = Subscribers.load(path)
+    db = tmp_path / "jobs.db"
+    subs = Subscribers.load(db)
     bot = FakeBot([message(10, 1, "/start"), message(11, 2, "/start@ProfesiaBot"), message(12, 1, "/stop")])
 
     assert handle_updates(bot, subs)
     subs.save()
 
-    reloaded = Subscribers.load(path)
+    reloaded = Subscribers.load(db)
     assert list(reloaded.chats) == [2]
+    assert reloaded.chats[2].name == "u2"
     assert reloaded.offset == 13
     assert len(bot.sent) == 3  # every command gets a reply
     assert not handle_updates(bot, reloaded)  # already-handled updates are not replayed
+
+
+# the old subscribers.json is imported into the db once; after that the db wins, even over a changed file
+def test_subscribers_json_is_imported_once(tmp_path):
+    db, legacy = tmp_path / "jobs.db", tmp_path / "subscribers.json"
+    legacy.write_text(json.dumps({
+        "offset": 42,
+        "subscribers": [{"chat_id": 7, "name": "anna", "subscribed_at": "2026-01-01T00:00:00+00:00"}],
+    }), encoding="utf-8")
+
+    imported = Subscribers.load(db, legacy)
+    assert (imported.offset, list(imported.chats)) == (42, [7])
+
+    legacy.write_text(json.dumps({"offset": 99, "subscribers": []}), encoding="utf-8")
+    reloaded = Subscribers.load(db, legacy)
+    assert (reloaded.offset, reloaded.chats) == (42, imported.chats)
+
+
+# no db rows and no old file: start empty, without writing anything
+def test_subscribers_start_empty_without_legacy_file(tmp_path):
+    subs = Subscribers.load(tmp_path / "jobs.db", tmp_path / "missing.json")
+    assert (subs.offset, subs.chats) == (0, {})
 
 
 # a verdict message shows the tag, escapes HTML and is cut to Telegram's limit
@@ -101,6 +125,18 @@ def test_verdict_message_fits_telegram_limit_and_escapes_html():
     assert "STRETCH</b>" in text
     assert "&lt;b&gt;gap&lt;/b&gt; &amp; more" in text
     assert text.endswith("…</blockquote>")
+
+
+# a header near or over the limit leaves little or no room: the report is cut or dropped, never loops
+def test_verdict_with_huge_header_returns():
+    # title lengths sweep room from small positive through zero to negative
+    for n in range(3950, 4100, 3):
+        offer = job(1, "x" * n)
+        offer.verdict = Verdict("SKIP", "<b>gap</b> & more " * 100, offer.url)
+
+        text = format_verdict(offer)
+
+        assert "<blockquote" not in text or len(text) <= MAX_MESSAGE_LEN
 
 
 # the details line names the offer's source, using the provider's label

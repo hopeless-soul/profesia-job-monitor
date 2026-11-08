@@ -23,6 +23,7 @@ class PedanticForbidModel(BaseModel):
 
 class TelegramConfig(PedanticForbidModel):
     token: str | None = None
+    # old JSON subscriber list, imported into the database once; kept so existing configs still load
     subscribers: Path = Path("subscribers.json")
 
 

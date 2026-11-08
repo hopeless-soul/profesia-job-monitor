@@ -9,7 +9,7 @@ providers: [profesia]         # sources to run: profesia (reads profesia_sk.yaml
 
 telegram:
   token: null               # bot token from @BotFather; null turns Telegram off
-  subscribers: ../subscribers.json
+  subscribers: ../subscribers.json   # old subscriber list: imported into the db once, then unused (subscribers live in jobs.db)
 
 model:                      # remove the section to run without verdicts
   provider: google          # required: anthropic, openai or google

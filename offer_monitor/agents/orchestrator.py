@@ -9,7 +9,7 @@ from langchain_core.language_models import BaseChatModel
 from langgraph.graph.state import CompiledStateGraph
 
 from ..models import Verdict
-from .offer_reviewer import VERDICT_SCHEMA, as_tool, build_offer_reviewer
+from .offer_reviewer import VERDICT_FORMAT, as_tool, build_offer_reviewer
 
 PROMPT = Path(__file__).parent / "prompts" / "orchestrator.md"
 
@@ -21,7 +21,7 @@ def build_orchestrator(llm: BaseChatModel, backstory: str) -> CompiledStateGraph
         llm,
         tools=subagents,
         system_prompt=PROMPT.read_text(encoding="utf-8"),
-        response_format=VERDICT_SCHEMA,
+        response_format=VERDICT_FORMAT,
         name="orchestrator",
     )
 
@@ -29,4 +29,6 @@ def build_orchestrator(llm: BaseChatModel, backstory: str) -> CompiledStateGraph
 # Run the pipeline for one offer URL
 def evaluate(orchestrator: CompiledStateGraph, url: str) -> Verdict:
     result = orchestrator.invoke({"messages": [{"role": "user", "content": url}]})
-    return Verdict.from_dict(result["structured_response"])
+    out = result["structured_response"]  # already validated by VERDICT_FORMAT
+    # keep the URL we asked about, not the one the model echoed back
+    return Verdict(out.tag, out.content, url)

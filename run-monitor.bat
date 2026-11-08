@@ -1,5 +1,5 @@
 @echo off
-rem Start the Profesia job monitor locally (uses data\configs\config.yaml, data\jobs.db, data\subscribers.json)
+rem Start the Profesia job monitor locally (uses data\configs\config.yaml, data\jobs.db)
 cd /d "%~dp0"
 
 rem require the virtual environment

@@ -3,6 +3,7 @@ import json
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 
+from offer_monitor.agents import offer_reviewer
 from offer_monitor.agents.offer_reviewer import as_tool, system_prompt
 from offer_monitor.agents.orchestrator import build_orchestrator, evaluate
 from offer_monitor.models import Verdict
@@ -35,7 +36,7 @@ def test_orchestrator_delegates_to_offer_reviewer():
 
     reviewer_output = [m for m in result["messages"] if isinstance(m, ToolMessage) and m.name == "offer_reviewer"]
     assert [json.loads(m.content) for m in reviewer_output] == [VERDICT]
-    assert Verdict.from_dict(result["structured_response"]) == Verdict.from_dict(VERDICT)
+    assert result["structured_response"].model_dump() == VERDICT
 
 
 # evaluate turns the orchestrator's answer into a Verdict
@@ -45,12 +46,30 @@ def test_evaluate_returns_verdict():
     assert evaluate(build_orchestrator(llm, "backstory"), URL) == Verdict("GO", "fits", URL)
 
 
+# an invalid answer (unknown tag, blank content) goes back to the model, which then answers correctly
+def test_evaluate_reasks_on_invalid_verdict():
+    llm = ScriptedModel(messages=iter([
+        call("Verdict", {"tag": "MAYBE", "content": "fits", "url": URL}, "1"),
+        call("Verdict", {"tag": "GO", "content": "   ", "url": URL}, "2"),
+        call("Verdict", VERDICT, "3"),
+    ]))
+
+    assert evaluate(build_orchestrator(llm, "backstory"), URL) == Verdict("GO", "fits", URL)
+
+
+# the stored verdict keeps the URL we asked about, whatever URL the model echoes
+def test_evaluate_keeps_input_url():
+    llm = ScriptedModel(messages=iter([call("Verdict", {**VERDICT, "url": "https://elsewhere"}, "1")]))
+
+    assert evaluate(build_orchestrator(llm, "backstory"), URL).url == URL
+
+
 # the subagent tool sends the URL as the only message and returns the verdict as JSON
 def test_reviewer_tool_passes_url_and_returns_json():
     class StubReviewer:
         def invoke(self, state):
             self.state = state
-            return {"structured_response": VERDICT}
+            return {"structured_response": offer_reviewer.Verdict(**VERDICT)}
 
     reviewer = StubReviewer()
 

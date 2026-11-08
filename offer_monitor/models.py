@@ -1,4 +1,4 @@
-# Job data model. Stored in SQLite by store.py.
+# Job data model. Stored in SQLite by the store package (store/jobs.py).
 
 from __future__ import annotations
 

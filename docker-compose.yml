@@ -1,4 +1,4 @@
-# Monitor + SQLite web viewer, sharing ./data (configs/config.yaml and the provider files, jobs.db, subscribers.json, agent_context/)
+# Monitor + SQLite web viewer, sharing ./data (configs/config.yaml and the provider files, jobs.db, agent_context/)
 services:
   # scraper, Telegram bot and verdict agents
   monitor:

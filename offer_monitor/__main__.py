@@ -178,7 +178,7 @@ def run(
         with closing(connect(config.db)) as conn, conn:
             for offer_uuid, ids in message_ids.items():
                 save_message_ids(conn, offer_uuid, ids)
-        print(f"Notified {len(subs.chats)} Telegram subscriber(s) \n")
+        print(f"Notified {len(subs.active_ids())} Telegram subscriber(s) \n")
 
     # STAGE 4
     # verdicts: only after every source is fetched and stored; on_verdict runs when each one finishes
@@ -366,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
         """
         interval = config.interval * 60
         next_run = time.monotonic()
-        bot_note = f"\nTelegram: {len(subs.chats)} Telegram subscriber(s)" if subs else ", Telegram: OFF"
+        bot_note = f"\nTelegram: {len(subs.active_ids())} Telegram subscriber(s)" if subs else ", Telegram: OFF"
         verdict_note = "\nVerdicts: ON" if review else "\nVerdicts: OFF"
         linkedin_note = "\nLinkedIn: ON" if "linkedin" in config.providers else ""
         print(

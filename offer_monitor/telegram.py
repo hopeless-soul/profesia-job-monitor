@@ -1,4 +1,4 @@
-# Telegram notifications. Users subscribe with /start and unsubscribe with /stop.
+# Telegram notifications. Users subscribe with /start and unsubscribe with /stop (the row is kept, only disabled).
 #
 # Uses long polling (getUpdates), so no webhook or public server is needed.
 # The database (subscribers and telegram_state tables) keeps the chat list plus the
@@ -145,6 +145,7 @@ class Subscriber:
     chat_id: int
     name: str | None = None
     subscribed_at: str | None = None
+    active: bool = True  # False after /stop or a block; the row is kept
 
 
 @dataclass
@@ -160,7 +161,7 @@ class Subscribers:
         with closing(connect(db)) as conn:
             offset, rows = load_subscribers(conn)
         if offset is not None:
-            return cls(db, offset, {r["chat_id"]: Subscriber(**r) for r in rows})
+            return cls(db, offset, {r["chat_id"]: Subscriber(**{**r, "active": bool(r["active"])}) for r in rows})
         if legacy is None or not legacy.exists():
             return cls(db)
 
@@ -176,6 +177,10 @@ class Subscribers:
     def save(self) -> None:
         with closing(connect(self.db)) as conn, conn:
             save_subscribers(conn, self.offset, [asdict(s) for s in self.chats.values()])
+
+    # Chats that get offers (not stopped or blocked)
+    def active_ids(self) -> list[int]:
+        return [chat_id for chat_id, s in self.chats.items() if s.active]
 
 
 def _command(text: str) -> str:
@@ -196,14 +201,21 @@ def handle_updates(bot: Bot, subs: Subscribers, timeout: int = 0) -> bool:
         cmd = _command(message.get("text") or "")
         if chat_id is None or not cmd:
             continue
+        sub = subs.chats.get(chat_id)
         if cmd == "/start":
-            if chat_id not in subs.chats:
+            # new chat: add it; a disabled one: turn it back on
+            if sub is None:
                 name = chat.get("username") or chat.get("title") or chat.get("first_name")
                 subs.chats[chat_id] = Subscriber(chat_id, name, now_iso())
                 log.info("subscribed %s (%s)", chat_id, name)
+            elif not sub.active:
+                sub.active = True
+                log.info("resubscribed %s", chat_id)
             reply = "Subscribed. You will get new Profesia.sk and LinkedIn offers here. Send /stop to unsubscribe."
         elif cmd == "/stop":
-            if subs.chats.pop(chat_id, None):
+            # keep the row (its offer messages point at it), only disable it
+            if sub and sub.active:
+                sub.active = False
                 log.info("unsubscribed %s", chat_id)
             reply = "Unsubscribed. Send /start to subscribe again."
         else:
@@ -254,24 +266,25 @@ def format_verdict(job: Job) -> str:
 
 
 # Send each offer as its own message to every subscriber.
-# Drops chats that blocked the bot. Returns (subs changed, {offer uuid: {chat_id: message_id}}).
+# Disables chats that blocked the bot. Returns (subs changed, {offer uuid: {chat_id: message_id}}).
 def notify(bot: Bot, subs: Subscribers, jobs: list[Job]) -> tuple[bool, dict[str, dict[int, int]]]:
     sent: dict[str, dict[int, int]] = {}
-    if not jobs or not subs.chats:
+    active = subs.active_ids()
+    if not jobs or not active:
         return False, sent
     changed = False
 
-    # one message per offer per chat
-    for chat_id in list(subs.chats):
+    # one message per offer per active chat
+    for chat_id in active:
         for i, job in enumerate(jobs):
             if i:
                 time.sleep(1)  # Telegram allows ~1 message/second per chat
             try:
                 sent.setdefault(job.uuid, {})[chat_id] = bot.send(chat_id, format_job(job))
             except TelegramBlockedError as e:
-                # blocked, kicked or chat gone: unsubscribe
-                log.warning("removing subscriber %s: %s", chat_id, e)
-                del subs.chats[chat_id]
+                # blocked, kicked or chat gone: disable it
+                log.warning("disabling subscriber %s: %s", chat_id, e)
+                subs.chats[chat_id].active = False
                 changed = True
                 break
             except TelegramError as e:

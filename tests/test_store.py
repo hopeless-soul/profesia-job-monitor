@@ -124,6 +124,8 @@ def test_old_database_is_migrated(tmp_path):
         );
         INSERT INTO offers (uuid, id, title, url, labels, verdict_tag, verdict_content, verdict_url)
             VALUES ('u1', 1, 'Dev', 'https://example.com/1', '[]', 'GO', 'fits', 'https://example.com/1');
+        CREATE TABLE subscribers (chat_id INTEGER PRIMARY KEY, name TEXT, subscribed_at TEXT);
+        INSERT INTO subscribers VALUES (20, 'bob', NULL);
         INSERT INTO offer_messages VALUES ('u1', 10, 100);
     """)
     old.close()
@@ -138,7 +140,11 @@ def test_old_database_is_migrated(tmp_path):
     assert [tuple(r) for r in conn.execute("SELECT offer_id, chat_id FROM offer_messages")] == [("u1", 10), ("u1", 20)]
     # the new key allows the same ID on another source, and the messages table still links to offers
     store_new(conn, [job(1, source="linkedin")], seen_at=T1)
-    assert "REFERENCES offers(" in conn.execute("SELECT sql FROM sqlite_master WHERE name = 'offer_messages'").fetchone()[0]
+    messages_sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'offer_messages'").fetchone()[0]
+    assert "REFERENCES offers(" in messages_sql
+    # chat_id now links to subscribers: old subscribers stay active, chat 10 (deleted by the old /stop) is back disabled
+    assert "REFERENCES subscribers(" in messages_sql
+    assert [tuple(r) for r in conn.execute("SELECT chat_id, active FROM subscribers")] == [(10, 0), (20, 1)]
     connect(db).close()  # second connect doesn't migrate again
 
 

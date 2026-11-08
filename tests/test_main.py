@@ -137,7 +137,7 @@ def test_run_once_notifies_and_reviews_only_fresh_offers(tmp_path, monkeypatch, 
     reviewed = []
 
     run(
-        Config(db=db), bot, SimpleNamespace(chats={10: None}),
+        Config(db=db), bot, SimpleNamespace(chats={10: None}, active_ids=lambda: [10]),
         lambda url: reviewed.append(url) or Verdict("GO", "ok", url),
         providers=[FakeProvider("linkedin", [offer(7, "dev", "acme", "linkedin"), offer(8, "QA", "ACME", "linkedin")])],
     )

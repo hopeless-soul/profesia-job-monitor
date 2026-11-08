@@ -83,12 +83,20 @@ def test_start_and_stop_update_subscribers_once(tmp_path):
     assert handle_updates(bot, subs)
     subs.save()
 
+    # /stop keeps the row, only disabled
     reloaded = Subscribers.load(db)
-    assert list(reloaded.chats) == [2]
+    assert reloaded.active_ids() == [2]
+    assert reloaded.chats[1].active is False
     assert reloaded.chats[2].name == "u2"
     assert reloaded.offset == 13
     assert len(bot.sent) == 3  # every command gets a reply
     assert not handle_updates(bot, reloaded)  # already-handled updates are not replayed
+
+    # /start again turns the disabled chat back on
+    bot.updates.append(message(13, 1, "/start"))
+    handle_updates(bot, reloaded)
+    reloaded.save()
+    assert Subscribers.load(db).active_ids() == [1, 2]
 
 
 # the old subscribers.json is imported into the db once; after that the db wins, even over a changed file
@@ -160,8 +168,8 @@ def test_notify_sends_one_message_per_offer_and_returns_ids(tmp_path, monkeypatc
     assert ids == {"u1": {1: 1, 2: 3}, "u2": {1: 2, 2: 4}}
 
 
-# chats that blocked the bot are unsubscribed
-def test_notify_drops_chats_that_blocked_the_bot(tmp_path):
+# chats that blocked the bot are disabled (kept), and get no more offers
+def test_notify_disables_chats_that_blocked_the_bot(tmp_path):
     bot = FakeBot(blocked={2})
     subs = two_subscribers(bot, tmp_path)
 
@@ -169,7 +177,8 @@ def test_notify_drops_chats_that_blocked_the_bot(tmp_path):
 
     assert changed
     assert ids == {"u1": {1: 1}}
-    assert list(subs.chats) == [1]
+    assert subs.active_ids() == [1]
+    assert subs.chats[2].active is False
 
 
 # one network timeout is retried; a second one is raised

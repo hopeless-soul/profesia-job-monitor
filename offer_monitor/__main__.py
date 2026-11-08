@@ -6,14 +6,13 @@
 #     python -m offer_monitor --once               # single run, then exit
 #
 # Offers are stored in SQLite (config `db`). With a Telegram token (config
-# telegram.token or TELEGRAM_BOT_TOKEN), each new offer is sent to everyone who
+# telegram.token), each new offer is sent to everyone who
 # sent /start to the bot. With an LLM configured (config `model`), every new
 # offer then gets a verdict that is saved and added to its Telegram message.
 # `linkedin` in `providers` turns LinkedIn searches on (local runs only).
 from __future__ import annotations
 
 import logging
-import os
 import sys
 import time
 from collections.abc import Callable
@@ -49,10 +48,20 @@ from .telegram import (
 )
 from .cli import build_parser
 
-# ANSI colors for console output only (not logs); 256-color orange, since the 16-color yellow looks more yellow than orange
+"""
+ANSI Colors
+"""
 YELLOW, ORANGE, GREY, RESET = "\033[33m", "\033[38;5;208m", "\033[90m", "\033[0m"
 
-# Background workers for verdicts
+
+def disable_colors():
+    global YELLOW, ORANGE, GREY, RESET
+    YELLOW = ORANGE = GREY = RESET = ""
+
+
+"""
+Background workers for verdicts
+"""
 VERDICTS = ThreadPoolExecutor(max_workers=2, thread_name_prefix="verdict")
 
 
@@ -69,9 +78,7 @@ def fetch_source(provider: SourceProvider) -> list[Job] | None:
             kind = type(e).__name__
             # gives up
             if not e.retryable:
-                logging.warning(
-                    "%s failed (%s), not retrying: %s", provider.name, kind, e
-                )
+                logging.warning("%s failed (%s), not retrying: %s", provider.name, kind, e)
                 return None
             # the last attempt gives up;
             if attempt == attempts:
@@ -99,7 +106,6 @@ def fetch_source(provider: SourceProvider) -> list[Job] | None:
     return None
 
 
-# Run Once
 def run(
     config: Config,
     bot: Bot | None,
@@ -124,18 +130,13 @@ def run(
         if jobs is None:
             continue
         jobs = provider.dedup_fetched(jobs)
-        print(f"{provider.name}: {len(jobs)} offers")
+        print(f"{YELLOW}{provider.name}: {len(jobs)} offers{RESET}")
         fetched.append((provider, jobs))
-
-    # TODO: dedupe fetched to each other  
-
     scraped = sum(len(jobs) for _, jobs in fetched)
-
-
 
     # STAGE 2
     # store (one transaction): each source picks its offers not stored yet, stored ones are refreshed,
-    # then the new ones are inserted; a title + company duplicate across sources is stored but not returned
+    # then the new ones are inserted; a title + company duplicate across sources is still stored but passed down to the pipe;
     seen_at = now_iso()
     with closing(connect(config.db)) as conn, conn:
         before = count_jobs(conn)
@@ -150,13 +151,9 @@ def run(
     # print new offers and totals
     for job in added:
         salary = job.salary.raw if job.salary else "-"
-        print(
-            f"{YELLOW}NEW {job.source} {job.id}  {job.title} | {job.company} | {salary}{RESET}"
-        )
+        print(f"\n{YELLOW}NEW {job.source} {job.id}  {job.title} | {job.company} | {salary}{RESET}")
     # summary line in orange, then a blank line
-    print(
-        f"{ORANGE}Scraped {scraped}, new {len(added)}, dup {dups}, total {total} in {config.db}{RESET}"
-    )
+    print(f"{ORANGE}Scraped {scraped}, new {len(added)}, dup {dups}, total {total} in {config.db}{RESET}")
     print()
 
     # notify subscribers and remember which message each chat got
@@ -168,22 +165,18 @@ def run(
         with closing(connect(config.db)) as conn, conn:
             for offer_uuid, ids in message_ids.items():
                 save_message_ids(conn, offer_uuid, ids)
-        print(f"Notified {len(subs.chats)} Telegram subscriber(s) \n\n")
+        print(f"Notified {len(subs.chats)} Telegram subscriber(s) \n")
 
     # STAGE 3,
     # verdicts: only after every source is fetched and stored; on_verdict runs when each one finishes
     if review:
         for job in added:
             future = VERDICTS.submit(review, job.url)
-            future.add_done_callback(
-                partial(on_verdict, config.db, bot, job, message_ids.get(job.uuid, {}))
-            )
+            future.add_done_callback(partial(on_verdict, config.db, bot, job, message_ids.get(job.uuid, {})))
 
 
 # Verdict callback: save it, add it to the offer's Telegram messages, log it
-def on_verdict(
-    db: Path, bot: Bot | None, job: Job, message_ids: dict[int, int], future: Future
-) -> None:
+def on_verdict(db: Path, bot: Bot | None, job: Job, message_ids: dict[int, int], future: Future) -> None:
     # skip cancelled reviews (Ctrl+C), only log failed ones
     if future.cancelled():
         return
@@ -233,10 +226,7 @@ def build_review(config: Config) -> Callable[[str], Verdict] | None:
         backstory = config.backstory.read_text(encoding="utf-8")
         # append pet projects (projects/*.md next to the backstory) as extra evidence
         projects = sorted((config.backstory.parent / "projects").glob("*.md"))
-        backstory += "".join(
-            f"\n\n## Pet project: {p.stem}\n\n{p.read_text(encoding='utf-8')}"
-            for p in projects
-        )
+        backstory += "".join(f"\n\n## Pet project: {p.stem}\n\n{p.read_text(encoding='utf-8')}" for p in projects)
         return partial(evaluate, build_orchestrator(build_llm(config.model), backstory))
     except Exception as e:
         logging.warning("verdicts disabled: %s", e)
@@ -251,6 +241,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.log:
         sys.stdout = sys.stderr = open(args.log, "a", encoding="utf-8", buffering=1)
         print(f"--- {datetime.now().isoformat(timespec='seconds')}")
+
+    # Drop the color codes when writing:
+    # to the log file OR to a non-terminal;
+    if args.log or not sys.stdout.isatty():
+        disable_colors()
+
     # log lines get a grey timestamp in brackets, same format as the run header
     logging.basicConfig(
         level=logging.INFO if args.verbose else logging.WARNING,
@@ -267,7 +263,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Bot setup
     bot = subs = None
-    token = config.telegram.token or os.environ.get("TELEGRAM_BOT_TOKEN")
+    token = config.telegram.token
     if token and not args.no_notify:
         bot, subs = Bot(token), Subscribers.load(config.telegram.subscribers)
 
@@ -278,9 +274,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.once:
         if bot and subs:
             try:
-                sync_subscribers(
-                    bot, subs
-                )  # pick up /start and /stop sent since the last run
+                sync_subscribers(bot, subs)  # pick up /start and /stop sent since the last run
             except TelegramAuthError:
                 parser.error("Telegram rejected the bot token")
             except TelegramError as e:
@@ -293,16 +287,10 @@ def main(argv: list[str] | None = None) -> int:
     # CRON
     interval = config.interval * 60
     next_run = time.monotonic()
-    bot_note = (
-        f"\nTelegram: {len(subs.chats)} Telegram subscriber(s)"
-        if subs
-        else ", Telegram: OFF"
-    )
+    bot_note = f"\nTelegram: {len(subs.chats)} Telegram subscriber(s)" if subs else ", Telegram: OFF"
     verdict_note = "\nVerdicts: ON" if review else "\nVerdicts: OFF"
     linkedin_note = "\nLinkedIn: ON" if "linkedin" in config.providers else ""
-    print(
-        f"Running: scraping every {config.interval:g} min. Ctrl+C to stop.{bot_note}{verdict_note}{linkedin_note}\n"
-    )
+    print(f"Running: scraping every {config.interval:g} min. Ctrl+C to stop.{bot_note}{verdict_note}{linkedin_note}\n")
     try:
         while True:
             try:

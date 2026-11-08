@@ -1,6 +1,6 @@
 # Imports
 import argparse
-import os
+import subprocess
 from pathlib import Path
 
 
@@ -27,5 +27,5 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
-# Switch on ANSI escape codes in old Windows consoles (colors live in globals.py)
-os.system("")
+# Switch on ANSI escape codes in old Windows consoles
+subprocess.run("", shell=True)

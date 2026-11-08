@@ -8,7 +8,7 @@ interval: 60                   # minutes between scrapes; use --once for a singl
 providers: [profesia]         # sources to run: profesia (reads profesia_sk.yaml), linkedin (reads linkedin.yaml)
 
 telegram:
-  token: null               # bot token from @BotFather; null uses the TELEGRAM_BOT_TOKEN env var
+  token: null               # bot token from @BotFather; null turns Telegram off
   subscribers: ../subscribers.json
 
 model:                      # remove the section to run without verdicts

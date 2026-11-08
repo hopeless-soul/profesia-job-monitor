@@ -1,0 +1,3 @@
+# Black formatter settings
+[tool.black]
+line-length = 120

@@ -107,8 +107,8 @@ async def collect(call: Call, source: str, config: LinkedInConfig, jobs: list[Jo
             result = await call("get_job_details", {"job_id": str(job_id)})
             job = parse_job_details(job_id, result["sections"]["job_posting"], source)
             log.info(
-                "linkedin job %s parsed: %s | %s | %s | %s | %s",
-                job_id, shorten(job.title), job.company, job.location, job.posted_text, ", ".join(job.labels) or "-",
+                "linkedin job %s parsed: %s | %s | %s | %s",
+                job_id, shorten(job.title), job.company, job.location, ", ".join(job.labels) or "-",
             )
             jobs.append(job)
         except LinkedInAuthError:

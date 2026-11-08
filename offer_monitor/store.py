@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS {name} (
 );
 """
 
-# Tables: one row per offer, plus the Telegram message each chat got for it
+# Tables: one row per offer, the Telegram message each chat got for it,
+# and the lease of the monitor that runs on this database (one row at most)
 _SCHEMA = _OFFERS_TABLE.format(name="offers") + """
 CREATE TABLE IF NOT EXISTS offer_messages (
     offer_id TEXT NOT NULL REFERENCES offers(uuid),
@@ -42,7 +43,17 @@ CREATE TABLE IF NOT EXISTS offer_messages (
     message_id INTEGER NOT NULL,
     PRIMARY KEY (offer_id, chat_id)
 );
+CREATE TABLE IF NOT EXISTS monitor_lease (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    owner     TEXT NOT NULL,                  -- hostname:pid of the running monitor
+    heartbeat TEXT NOT NULL                   -- ISO UTC time the owner last renewed it
+);
 """
+
+# A lease whose heartbeat is older than this is from a stopped monitor and can be taken over
+LEASE_TTL = 120  # seconds
+# How often the running monitor renews its lease; well under LEASE_TTL
+LEASE_BEAT = 30  # seconds
 
 # Columns written on insert (verdict columns are filled later by save_verdict)
 _INSERT_COLUMNS = (
@@ -129,9 +140,10 @@ def insert_jobs(conn: sqlite3.Connection, jobs: list[Job]) -> None:
     for job in jobs:
         job.uuid = job.uuid or str(uuid.uuid4())
 
-    # insert; OR IGNORE only guards against a second run storing the same offer meanwhile
+    # insert; callers drop stored offers first and the lease keeps other monitors out,
+    # so a repeat is a bug and raises IntegrityError
     conn.executemany(
-        f"INSERT OR IGNORE INTO offers ({', '.join(_INSERT_COLUMNS)}) "
+        f"INSERT INTO offers ({', '.join(_INSERT_COLUMNS)}) "
         f"VALUES ({', '.join(':' + c for c in _INSERT_COLUMNS)})",
         [_row(job) for job in jobs],
     )
@@ -195,6 +207,34 @@ def save_verdict(conn: sqlite3.Connection, offer_id: str, verdict: Verdict) -> N
         "UPDATE offers SET verdict_tag = ?, verdict_content = ?, verdict_url = ? WHERE uuid = ?",
         (verdict.tag, verdict.content, verdict.url, offer_id),
     )
+
+
+### Take the database for `owner`; returns None when taken, or the owner of a live lease held by someone else.
+### The same owner (e.g. a restarted container: same hostname, PID 1) takes its own lease back right away.
+def claim_lease(conn: sqlite3.Connection, owner: str, now: str) -> str | None:
+    # take the write lock before reading, so two monitors starting together can't both see a free lease
+    conn.execute("BEGIN IMMEDIATE")
+    row = conn.execute("SELECT owner, heartbeat FROM monitor_lease").fetchone()
+
+    # refuse while another monitor's heartbeat is fresh
+    if row and row["owner"] != owner:
+        age = datetime.fromisoformat(now) - datetime.fromisoformat(row["heartbeat"])
+        if age.total_seconds() < LEASE_TTL:
+            return row["owner"]
+
+    # free, stale or ours: take it
+    conn.execute("INSERT OR REPLACE INTO monitor_lease (id, owner, heartbeat) VALUES (1, ?, ?)", (owner, now))
+    return None
+
+
+### Refresh `owner`'s heartbeat; False when the lease is no longer ours (another monitor took it over)
+def renew_lease(conn: sqlite3.Connection, owner: str, now: str) -> bool:
+    return conn.execute("UPDATE monitor_lease SET heartbeat = ? WHERE owner = ?", (now, owner)).rowcount == 1
+
+
+### Free the database, only if `owner` still holds it
+def release_lease(conn: sqlite3.Connection, owner: str) -> None:
+    conn.execute("DELETE FROM monitor_lease WHERE owner = ?", (owner,))
 
 
 ### Get offer by its `source` & `id`;

@@ -1,14 +1,20 @@
 import sqlite3
+from contextlib import closing
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from offer_monitor.models import Job, Verdict
 from offer_monitor.providers.profesia_sk.parser import parse_listing
 from offer_monitor.store import (
+    LEASE_TTL,
+    claim_lease,
     connect,
     count_jobs,
     get_job,
     known_ids,
     refresh_known,
+    release_lease,
+    renew_lease,
     save_verdict,
     store_new,
 )
@@ -130,3 +136,56 @@ def test_old_database_is_migrated(tmp_path):
     store_new(conn, [job(1, source="linkedin")], seen_at=T1)
     assert "REFERENCES offers(" in conn.execute("SELECT sql FROM sqlite_master WHERE name = 'offer_messages'").fetchone()[0]
     connect(db).close()  # second connect doesn't migrate again
+
+
+# ISO time `seconds` after T1, for lease ages
+def later(seconds: int) -> str:
+    return (datetime.fromisoformat(T1) + timedelta(seconds=seconds)).isoformat()
+
+
+# claim inside its own committed transaction, the way main() does
+def claim(db: Path, owner: str, now: str) -> str | None:
+    with closing(connect(db)) as conn, conn:
+        return claim_lease(conn, owner, now)
+
+
+# a free database is taken; another monitor is refused while the holder's heartbeat is fresh
+def test_lease_refuses_a_second_monitor_while_fresh(tmp_path):
+    db = tmp_path / "jobs.db"
+    assert claim(db, "pc:1", T1) is None
+    assert claim(db, "docker:1", later(LEASE_TTL - 1)) == "pc:1"
+
+
+# a stale lease (holder crashed) is taken over; the same owner takes its own lease back right away
+def test_lease_is_taken_over_when_stale_or_by_the_same_owner(tmp_path):
+    db = tmp_path / "jobs.db"
+    claim(db, "pc:1", T1)
+    assert claim(db, "pc:1", later(1)) is None
+    assert claim(db, "docker:1", later(1 + LEASE_TTL)) is None
+    assert claim(db, "pc:1", later(2 + LEASE_TTL)) == "docker:1"
+
+
+# renewing keeps the lease fresh; after a takeover renew reports it is lost
+def test_renew_keeps_the_lease_and_reports_a_takeover(tmp_path):
+    db = tmp_path / "jobs.db"
+    claim(db, "pc:1", T1)
+    with closing(connect(db)) as conn, conn:
+        assert renew_lease(conn, "pc:1", later(LEASE_TTL))
+    assert claim(db, "docker:1", later(LEASE_TTL + 1)) == "pc:1"
+
+    claim(db, "docker:1", later(3 * LEASE_TTL))
+    with closing(connect(db)) as conn, conn:
+        assert not renew_lease(conn, "pc:1", later(3 * LEASE_TTL))
+
+
+# release frees the database at once, but never another monitor's lease
+def test_release_frees_only_the_owners_lease(tmp_path):
+    db = tmp_path / "jobs.db"
+    claim(db, "pc:1", T1)
+    with closing(connect(db)) as conn, conn:
+        release_lease(conn, "docker:1")
+    assert claim(db, "docker:1", later(1)) == "pc:1"
+
+    with closing(connect(db)) as conn, conn:
+        release_lease(conn, "pc:1")
+    assert claim(db, "docker:1", later(2)) is None

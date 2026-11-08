@@ -36,7 +36,7 @@ echo Monitor is running. Press Ctrl+C to stop.
 echo.
 
 rem -v shows verdict log lines
-.venv\Scripts\python.exe -m offer_monitor -v --log monitor.log
+.venv\Scripts\python.exe -m offer_monitor -v
 
 echo.
 echo Monitor stopped.

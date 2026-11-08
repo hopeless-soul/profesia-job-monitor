@@ -10,10 +10,16 @@
 # sent /start to the bot. With an LLM configured (config `model`), every new
 # offer then gets a verdict that is saved and added to its Telegram message.
 # `linkedin` in `providers` turns LinkedIn searches on (local runs only).
+# Only one monitor runs per database, wherever it runs: it holds a lease row in the db.
 from __future__ import annotations
 
 import logging
+import os
+import signal
+import socket
+import sqlite3
 import sys
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -28,11 +34,16 @@ from .models import Job, Verdict
 from .providers import build_providers
 from .providers.base import SourceProvider, SourceProviderError
 from .store import (
+    LEASE_BEAT,
+    LEASE_TTL,
+    claim_lease,
     connect,
     count_jobs,
     known_ids,
     now_iso,
     refresh_known,
+    release_lease,
+    renew_lease,
     save_message_ids,
     save_verdict,
     store_new,
@@ -233,6 +244,26 @@ def build_review(config: Config) -> Callable[[str], Verdict] | None:
         return None
 
 
+# Renew the lease in the background every LEASE_BEAT seconds (a scrape can take minutes);
+# the returned event is set once another monitor has taken the lease over
+def keep_lease(db: Path, owner: str) -> threading.Event:
+    lost = threading.Event()
+
+    def beat() -> None:
+        while not lost.is_set():
+            time.sleep(LEASE_BEAT)
+            # own connection: this runs in its own thread; a busy db only skips one beat
+            try:
+                with closing(connect(db)) as conn, conn:
+                    if not renew_lease(conn, owner, now_iso()):
+                        lost.set()
+            except sqlite3.Error as e:
+                logging.warning("lease heartbeat skipped: %s", e)
+
+    threading.Thread(target=beat, name="lease", daemon=True).start()
+    return lost
+
+
 # Main
 def main(argv: list[str] | None = None) -> int:
     # Load run args
@@ -261,61 +292,86 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as e:
         parser.error(str(e))
 
-    # Bot setup
-    bot = subs = None
-    token = config.telegram.token
-    if token and not args.no_notify:
-        bot, subs = Bot(token), Subscribers.load(config.telegram.subscribers)
+    # One monitor per database, wherever it runs (Windows or the Docker container):
+    # take the lease in the db, or stop while another live monitor holds it
+    owner = f"{socket.gethostname()}:{os.getpid()}"
+    with closing(connect(config.db)) as conn, conn:
+        holder = claim_lease(conn, owner, now_iso())
+    if holder:
+        parser.error(
+            f"another monitor ({holder}) is using {config.db}; "
+            f"if it has stopped, its lease expires within {LEASE_TTL // 60} min"
+        )
+    lease_lost = keep_lease(config.db, owner)
+    # `docker stop` sends SIGTERM, which PID 1 ignores by default: treat it as Ctrl+C so the lease is released
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
 
-    # Verdict agent setup
-    review = build_review(config)
-
-    # Run Once Scenario
-    if args.once:
-        if bot and subs:
-            try:
-                sync_subscribers(bot, subs)  # pick up /start and /stop sent since the last run
-            except TelegramAuthError:
-                parser.error("Telegram rejected the bot token")
-            except TelegramError as e:
-                logging.warning("subscriber sync skipped: %s", e)
-        run(config, bot, subs, review, providers=providers)
-        # wait for pending verdicts before exiting
-        VERDICTS.shutdown(wait=True)
-        return 0
-
-    # CRON
-    interval = config.interval * 60
-    next_run = time.monotonic()
-    bot_note = f"\nTelegram: {len(subs.chats)} Telegram subscriber(s)" if subs else ", Telegram: OFF"
-    verdict_note = "\nVerdicts: ON" if review else "\nVerdicts: OFF"
-    linkedin_note = "\nLinkedIn: ON" if "linkedin" in config.providers else ""
-    print(f"Running: scraping every {config.interval:g} min. Ctrl+C to stop.{bot_note}{verdict_note}{linkedin_note}\n")
     try:
-        while True:
-            try:
-                if time.monotonic() >= next_run:
-                    next_run = time.monotonic() + interval
-                    run(config, bot, subs, review, providers=providers)
-                wait = max(0, int(next_run - time.monotonic()))
-                if bot and subs:
-                    # Long-poll so /start and /stop get answered right away between scrapes.
-                    sync_subscribers(bot, subs, timeout=min(30, wait))
-                else:
-                    time.sleep(wait)
-            except TelegramAuthError:
-                parser.error("Telegram rejected the bot token")
-            except TelegramError as e:
-                logging.warning("%s; retrying in 30 s", e)
-                time.sleep(30)
-            except Exception:
-                # One failed scrape (network, site change) must not kill the loop; the next hour retries.
-                logging.exception("run failed; retrying in 30 s")
-                time.sleep(30)
-    except KeyboardInterrupt:
-        # drop queued verdicts; ones already running finish before exit
-        VERDICTS.shutdown(wait=False, cancel_futures=True)
-        return 0
+        # Bot setup
+        bot = subs = None
+        token = config.telegram.token
+        if token and not args.no_notify:
+            bot, subs = Bot(token), Subscribers.load(config.telegram.subscribers)
+
+        # Verdict agent setup
+        review = build_review(config)
+
+        # Run Once Scenario
+        if args.once:
+            if bot and subs:
+                try:
+                    sync_subscribers(bot, subs)  # pick up /start and /stop sent since the last run
+                except TelegramAuthError:
+                    parser.error("Telegram rejected the bot token")
+                except TelegramError as e:
+                    logging.warning("subscriber sync skipped: %s", e)
+            run(config, bot, subs, review, providers=providers)
+            # wait for pending verdicts before exiting (they write to the db, so the lease is still held)
+            VERDICTS.shutdown(wait=True)
+            return 0
+
+        # CRON
+        interval = config.interval * 60
+        next_run = time.monotonic()
+        bot_note = f"\nTelegram: {len(subs.chats)} Telegram subscriber(s)" if subs else ", Telegram: OFF"
+        verdict_note = "\nVerdicts: ON" if review else "\nVerdicts: OFF"
+        linkedin_note = "\nLinkedIn: ON" if "linkedin" in config.providers else ""
+        print(f"Running: scraping every {config.interval:g} min. Ctrl+C to stop.{bot_note}{verdict_note}{linkedin_note}\n")
+        try:
+            while True:
+                # another monitor took the database over (this one stalled past the lease TTL): stop
+                if lease_lost.is_set():
+                    logging.error("another monitor took over %s; stopping", config.db)
+                    VERDICTS.shutdown(wait=False, cancel_futures=True)
+                    return 1
+                try:
+                    if time.monotonic() >= next_run:
+                        next_run = time.monotonic() + interval
+                        run(config, bot, subs, review, providers=providers)
+                    wait = max(0, int(next_run - time.monotonic()))
+                    if bot and subs:
+                        # Long-poll so /start and /stop get answered right away between scrapes.
+                        sync_subscribers(bot, subs, timeout=min(30, wait))
+                    else:
+                        # wake at least every lease beat so a lost lease is noticed between long waits
+                        time.sleep(min(wait, LEASE_BEAT))
+                except TelegramAuthError:
+                    parser.error("Telegram rejected the bot token")
+                except TelegramError as e:
+                    logging.warning("%s; retrying in 30 s", e)
+                    time.sleep(30)
+                except Exception:
+                    # One failed scrape (network, site change) must not kill the loop; the next hour retries.
+                    logging.exception("run failed; retrying in 30 s")
+                    time.sleep(30)
+        except KeyboardInterrupt:
+            # drop queued verdicts; ones already running finish before exit
+            VERDICTS.shutdown(wait=False, cancel_futures=True)
+            return 0
+    finally:
+        # free the database right away on any exit (a crash leaves it to expire after LEASE_TTL)
+        with closing(connect(config.db)) as conn, conn:
+            release_lease(conn, owner)
 
 
 if __name__ == "__main__":

@@ -167,6 +167,7 @@ def run(
     print(f"{ORANGE}Scraped {scraped}, new {len(added)}, dup {dups}, total {total} in {config.db}{RESET}")
     print()
 
+    # STAGE 3
     # notify subscribers and remember which message each chat got
     message_ids: dict[str, dict[int, int]] = {}
     if bot and subs and added:
@@ -178,7 +179,7 @@ def run(
                 save_message_ids(conn, offer_uuid, ids)
         print(f"Notified {len(subs.chats)} Telegram subscriber(s) \n")
 
-    # STAGE 3,
+    # STAGE 4
     # verdicts: only after every source is fetched and stored; on_verdict runs when each one finishes
     if review:
         for job in added:
@@ -266,15 +267,18 @@ def keep_lease(db: Path, owner: str) -> threading.Event:
 
 # Main
 def main(argv: list[str] | None = None) -> int:
-    # Load run args
+    """
+    Load run args
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.log:
         sys.stdout = sys.stderr = open(args.log, "a", encoding="utf-8", buffering=1)
         print(f"--- {datetime.now().isoformat(timespec='seconds')}")
 
-    # Drop the color codes when writing:
-    # to the log file OR to a non-terminal;
+    """
+    Setup logger
+    """
     if args.log or not sys.stdout.isatty():
         disable_colors()
 
@@ -285,15 +289,20 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
 
-    # Load config and the providers it lists (each reads its own file next to it)
+    """
+    Load configs
+    """
     try:
         config = load_config()
+        # Load providers mentioned in main config (each reads its own file next to it)
         providers = build_providers(config.providers, CONFIG_DIR)
     except ConfigError as e:
         parser.error(str(e))
 
-    # One monitor per database, wherever it runs (Windows or the Docker container):
-    # take the lease in the db, or stop while another live monitor holds it
+    """
+    Claim the lease in the database, or stop if another monitor is running there
+    """
+    # One monitor per database, wherever it runs (Windows or the Docker container)
     owner = f"{socket.gethostname()}:{os.getpid()}"
     with closing(connect(config.db)) as conn, conn:
         holder = claim_lease(conn, owner, now_iso())
@@ -306,17 +315,26 @@ def main(argv: list[str] | None = None) -> int:
     # `docker stop` sends SIGTERM, which PID 1 ignores by default: treat it as Ctrl+C so the lease is released
     signal.signal(signal.SIGTERM, signal.default_int_handler)
 
+    """
+    Run the monitor
+    """
     try:
-        # Bot setup
+        """
+        Telegram bot setup
+        """
         bot = subs = None
         token = config.telegram.token
         if token and not args.no_notify:
             bot, subs = Bot(token), Subscribers.load(config.telegram.subscribers)
 
-        # Verdict agent setup
+        """
+        Verdict pipeline setup
+        """
         review = build_review(config)
 
-        # Run Once Scenario
+        """
+        Run Once Scenario
+        """
         if args.once:
             if bot and subs:
                 try:
@@ -330,13 +348,17 @@ def main(argv: list[str] | None = None) -> int:
             VERDICTS.shutdown(wait=True)
             return 0
 
-        # CRON
+        """
+        Run Forever Scenario
+        """
         interval = config.interval * 60
         next_run = time.monotonic()
         bot_note = f"\nTelegram: {len(subs.chats)} Telegram subscriber(s)" if subs else ", Telegram: OFF"
         verdict_note = "\nVerdicts: ON" if review else "\nVerdicts: OFF"
         linkedin_note = "\nLinkedIn: ON" if "linkedin" in config.providers else ""
-        print(f"Running: scraping every {config.interval:g} min. Ctrl+C to stop.{bot_note}{verdict_note}{linkedin_note}\n")
+        print(
+            f"Running: scraping every {config.interval:g} min. Ctrl+C to stop.{bot_note}{verdict_note}{linkedin_note}\n"
+        )
         try:
             while True:
                 # another monitor took the database over (this one stalled past the lease TTL): stop

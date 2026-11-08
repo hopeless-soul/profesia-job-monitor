@@ -209,7 +209,7 @@ def save_verdict(conn: sqlite3.Connection, offer_id: str, verdict: Verdict) -> N
     )
 
 
-### Take the database for `owner`; returns None when taken, or the owner of a live lease held by someone else.
+### Assigns database to `owner`; Returns None when taken.
 ### The same owner (e.g. a restarted container: same hostname, PID 1) takes its own lease back right away.
 def claim_lease(conn: sqlite3.Connection, owner: str, now: str) -> str | None:
     # take the write lock before reading, so two monitors starting together can't both see a free lease

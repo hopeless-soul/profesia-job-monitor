@@ -127,7 +127,8 @@ SETUP_MARKERS = ("downloading", "setting up", "installing")
 def _error_for(text: str) -> LinkedInError:
     lowered = text.lower()
     if any(marker in lowered for marker in AUTH_MARKERS):
-        return LinkedInAuthError(text)
+        # tell the user the one action that unblocks the run, since the warning is all they see
+        return LinkedInAuthError(f"{text} - run once in a console and log in to LinkedIn in the browser window")
     if any(marker in lowered for marker in SETUP_MARKERS):
         return LinkedInUnavailableError(text)
     return LinkedInError(text)
@@ -167,7 +168,14 @@ class LinkedInProvider(SourceProvider):
     def fetch(self) -> list[Job]:
         jobs: list[Job] = []
         try:
-            asyncio.run(asyncio.wait_for(self._run(jobs), self.time_limit))
+            # the MCP client wraps server errors in an ExceptionGroup; unwrap the provider error so it is not retried
+            try:
+                asyncio.run(asyncio.wait_for(self._run(jobs), self.time_limit))
+            except* SourceProviderError as group:
+                error = group.exceptions[0]
+                while isinstance(error, BaseExceptionGroup):
+                    error = error.exceptions[0]
+                raise error
         except TimeoutError:
             log.warning("linkedin stopped after %ss, keeping %d jobs", self.time_limit, len(jobs))
         except SourceProviderError:

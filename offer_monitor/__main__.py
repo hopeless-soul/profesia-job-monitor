@@ -379,6 +379,7 @@ def main(argv: list[str] | None = None) -> int:
                     logging.error("another monitor took over %s; stopping", config.db)
                     VERDICTS.shutdown(wait=False, cancel_futures=True)
                     return 1
+                #
                 try:
                     if time.monotonic() >= next_run:
                         next_run = time.monotonic() + interval

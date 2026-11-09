@@ -12,18 +12,22 @@ from .errors import ProfesiaLayoutError
 BASE_URL = "https://www.profesia.sk"
 
 _NUM = r"\d[\d ]*(?:,\d+)?"
+# Optional 'Od' (from) or 'Do' (up to) prefix, one amount or a range, currency, period.
+# The trailing $ anchors the end so a second price after the period makes the whole label fail,
+# instead of being silently dropped.
+# English words (from, to, per, month, hour, year) are accepted too, next to the Slovak ones.
 _SALARY_RE = re.compile(
-    rf"^(?P<from>od\s+)?(?P<a>{_NUM})\s*(?:-\s*(?P<b>{_NUM})\s*)?"
-    r"(?P<cur>EUR|€|Kč|CZK)\s*/\s*(?P<per>mesiac|hod)\.?",
+    rf"^(?:(?P<from>od|from)\s+|(?P<to>do|to)\s+)?(?P<a>{_NUM})\s*(?:-\s*(?P<b>{_NUM})\s*)?"
+    r"(?P<cur>EUR|€|Kč|CZK|USD)\s*(?:/|\s+per\s+)\s*(?P<per>mesiac|hod|rok|month|hour|year)\.?\s*$",
     re.IGNORECASE,
 )
-_CURRENCIES = {"eur": "EUR", "€": "EUR", "kč": "CZK", "czk": "CZK"}
-_PERIODS = {"mesiac": "month", "hod": "hour"}
+_CURRENCIES = {"eur": "EUR", "€": "EUR", "kč": "CZK", "czk": "CZK", "usd": "USD"}
+# Map the Slovak and English period words to the Period literal stored in the model.
+_PERIODS = {"mesiac": "month", "hod": "hour", "rok": "year", "month": "month", "hour": "hour", "year": "year"}
 
 
 def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", text.replace("\xa0", " ")).strip()
-
 
 def _number(text: str) -> float | int:
     value = float(text.replace(" ", "").replace(",", "."))
@@ -31,25 +35,33 @@ def _number(text: str) -> float | int:
 
 
 def parse_salary(text: str | None) -> Salary | None:
-    # Parse e.g. 'Od 3 900 EUR/mesiac' or '1 500 - 2 000 EUR/mesiac'.
-    #
     # Unrecognised formats keep the raw text with the structured fields set to None.
+    # e.g. 'Od 3 900 EUR/mesiac' or '1 500 - 2 000 EUR/mesiac'.
     if not text or not (raw := _clean(text)):
         return None
-    m = _SALARY_RE.match(raw)
-    if not m:
+    salary_match = _SALARY_RE.match(raw)
+    if not salary_match:
         return Salary(raw=raw, min=None, max=None, currency=None, period=None)
-    low = _number(m["a"])
-    if m["b"]:
-        high = _number(m["b"])
+    # Work out min and max from the prefix and whether a range was given.
+    first_amount = _number(salary_match["a"])
+    if salary_match["b"]:
+        # Explicit range: '1 500 - 2 000 EUR'.
+        min_value, max_value = first_amount, _number(salary_match["b"])
+    elif salary_match["to"]:
+        # 'Do 2 000 EUR': upper bound only.
+        min_value, max_value = None, first_amount
+    elif salary_match["from"]:
+        # 'Od 3 900 EUR': lower bound only.
+        min_value, max_value = first_amount, None
     else:
-        high = None if m["from"] else low
+        # Single exact figure: min and max are both the value.
+        min_value, max_value = first_amount, first_amount
     return Salary(
         raw=raw,
-        min=low,
-        max=high,
-        currency=_CURRENCIES[m["cur"].lower()],
-        period=_PERIODS[m["per"].lower()],
+        min=min_value,
+        max=max_value,
+        currency=_CURRENCIES[salary_match["cur"].lower()],
+        period=_PERIODS[salary_match["per"].lower()],
     )
 
 

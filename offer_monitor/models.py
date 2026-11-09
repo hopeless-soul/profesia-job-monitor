@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
-Period = Literal["month", "hour"]
+Period = Literal["month", "hour", "year"]
 
 
 # Parsed salary label of an offer

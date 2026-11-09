@@ -1,3 +1,10 @@
 # Black formatter settings
 [tool.black]
 line-length = 120
+
+# Pytest settings
+[tool.pytest.ini_options]
+# look for tests only in tests/ (not in .venv or data/)
+testpaths = ["tests"]
+# put the repo root on sys.path so tests can `import offer_monitor` without installing it
+pythonpath = ["."]

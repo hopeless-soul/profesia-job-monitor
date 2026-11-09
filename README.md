@@ -4,9 +4,9 @@ Scrapes job offers from Profesia.sk (LinkedIn works locally), stores them in SQL
 
 ## Features
 
-- Multiple sources, each with its own retry policy
+- Multiple data source (Profesia.sk, LinkedIn), each with its own retry policy
 - Dedup by `(source, id)`, so each offer is processed once
-- Telegram alerts, with verdicts edited into the same message later
+- Telegram alerts for multiple recipients, with verdicts edited into the same message later
 - One monitor per database, enforced by a lease row
 
 ## Quick start
@@ -35,8 +35,11 @@ copy data\configs\linkedin.example.yaml data\configs\linkedin.yaml
 docker compose up -d   # monitor + SQLite viewer at http://localhost:8080
 ```
 
-- Stop the Docker `monitor` service before running `run-monitor.bat`. Only one instance can use a database.
-- LinkedIn needs `uv` and a logged-in browser profile on the host. The image doesn't include `uv`, so LinkedIn doesn't run in Docker.
+> [!IMPORTANT]
+> Stop the Docker `monitor` service before running `run-monitor.bat`. Only one instance can use a database.
+
+> [!IMPORTANT]
+> LinkedIn needs `uv` and a logged-in browser profile on the host. The image doesn't include `uv`, so LinkedIn doesn't run in Docker.
 
 ## Configuration
 
